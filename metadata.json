@@ -1,0 +1,6 @@
+{
+  "name": "Badminton Tournament Manager",
+  "description": "A simple website to manage badminton tournaments, categories, players, groups, fixtures, and match scores with automatic ranking calculation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

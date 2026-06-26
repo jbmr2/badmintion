@@ -1,0 +1,67 @@
+{
+  "entities": {
+    "Root": {
+      "title": "Root",
+      "description": "Top-level organizational unit",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" }
+      },
+      "required": ["name"]
+    },
+    "Level1": {
+      "title": "Level1",
+      "description": "Parent team",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "rootId": { "type": "string" },
+        "points": { "type": "number" }
+      },
+      "required": ["name", "rootId"]
+    },
+    "Level2": {
+      "title": "Level2",
+      "description": "Chapter team",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "level1Id": { "type": "string" },
+        "points": { "type": "number" }
+      },
+      "required": ["name", "level1Id"]
+    },
+    "Player": {
+      "title": "Player",
+      "description": "Player",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "level2Id": { "type": "string" }
+      },
+      "required": ["name"]
+    }
+  },
+  "firestore": {
+    "/tournaments/{tournamentId}/roots/{rootId}": {
+      "schema": { "$ref": "Root" },
+      "description": "Stores root organization information inside a tournament"
+    },
+    "/tournaments/{tournamentId}/roots/{rootId}/level1/{level1Id}": {
+      "schema": { "$ref": "Level1" },
+      "description": "Stores level 1 parent teams inside a tournament"
+    },
+    "/tournaments/{tournamentId}/roots/{rootId}/level1/{level1Id}/level2/{level2Id}": {
+      "schema": { "$ref": "Level2" },
+      "description": "Stores level 2 chapters inside a tournament"
+    },
+    "/tournaments/{tournamentId}/roots/{rootId}/level1/{level1Id}/level2/{level2Id}/players/{playerId}": {
+      "schema": { "$ref": "Player" },
+      "description": "Stores assigned players inside a chapter"
+    },
+    "/players/{playerId}": {
+      "schema": { "$ref": "Player" },
+      "description": "Stores master tournament players roster"
+    }
+  }
+}

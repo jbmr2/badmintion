@@ -1,0 +1,127 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // --- Helper Functions ---
+    function isSignedIn() { 
+      return request.auth != null; 
+    }
+    
+    function isUser() { 
+      return request.auth != null && request.auth.token.email == 'jbmrsports@gmail.com'; 
+    }
+    
+    function isValidId(id) { 
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); 
+    }
+    
+    function incoming() { 
+      return request.resource.data; 
+    }
+    
+    function existing() { 
+      return resource.data; 
+    }
+
+    function isValidTournament(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() < 100
+          && data.startDate is string
+          && data.endDate is string
+          && data.venue is string;
+    }
+
+    function isValidCategory(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() < 100;
+    }
+
+    function isValidPlayer(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() < 100;
+    }
+
+    // --- Global / Root Rules ---
+    match /players/{playerId} {
+      allow read: if true;
+      allow write: if isSignedIn() && isValidPlayer(incoming());
+    }
+
+    match /live_pings/{pingId} {
+      allow read, write: if true;
+    }
+
+    // --- Tournament and Subcollections Rules ---
+    match /tournaments/{tournamentId} {
+      allow read: if true;
+      allow create: if isSignedIn() && isValidId(tournamentId) && isValidTournament(incoming());
+      allow update, delete: if isUser();
+
+      match /categories/{categoryId} {
+        allow read: if true;
+        allow create, update: if isSignedIn() && isValidCategory(incoming()) && exists(/databases/$(database)/documents/tournaments/$(tournamentId));
+        allow delete: if isSignedIn();
+      }
+
+      match /players/{playerId} {
+        allow read: if true;
+        allow create, update: if isSignedIn() && isValidPlayer(incoming()) && exists(/databases/$(database)/documents/tournaments/$(tournamentId));
+        allow delete: if isSignedIn();
+      }
+
+      match /groups/{groupId} {
+        allow read: if true;
+        allow create, update: if isSignedIn() && exists(/databases/$(database)/documents/tournaments/$(tournamentId));
+        allow delete: if isSignedIn();
+      }
+
+      match /fixtures/{fixtureId} {
+        allow read: if true;
+        allow create, update: if isSignedIn() && exists(/databases/$(database)/documents/tournaments/$(tournamentId));
+        allow delete: if isSignedIn();
+      }
+
+      match /matches/{matchId} {
+        allow read: if true;
+        allow create, update: if isSignedIn() && exists(/databases/$(database)/documents/tournaments/$(tournamentId));
+        allow delete: if isSignedIn();
+      }
+
+      match /teams/{teamId} {
+        allow read: if true;
+        allow create, update: if isSignedIn() && exists(/databases/$(database)/documents/tournaments/$(tournamentId));
+        allow delete: if isSignedIn();
+      }
+
+      match /roots/{rootId} {
+        allow read: if true;
+        allow create, update: if isSignedIn() && exists(/databases/$(database)/documents/tournaments/$(tournamentId));
+        allow delete: if isSignedIn();
+        
+        match /level1/{level1Id} {
+          allow read: if true;
+          allow create, update: if isSignedIn();
+          allow delete: if isSignedIn();
+          
+          match /level2/{level2Id} {
+            allow read: if true;
+            allow create, update: if isSignedIn();
+            allow delete: if isSignedIn();
+            
+            match /players/{playerId} {
+              allow read: if true;
+              allow write: if isSignedIn();
+            }
+          }
+        }
+      }
+    }
+    
+    // --- Public read fallback for all subcollections under tournaments ---
+    match /tournaments/{tournamentId}/{document=**} {
+      allow read: if true;
+    }
+
+    // --- Catch-all Default ---
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
