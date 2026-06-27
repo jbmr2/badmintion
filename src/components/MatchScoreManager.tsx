@@ -43,6 +43,7 @@ export default function MatchScoreManager({ tournamentId, onNext }: { tournament
   const [search, setSearch] = useState('');
   const [saving, setSaving] = useState(false);
   const [courts, setCourts] = useState<string[]>(['Court 1', 'Court 2', 'Court 3', 'Court 4', 'Court 5', 'Court 6']);
+  const [tournament, setTournament] = useState<any | null>(null);
 
   // Set-by-set & Court interactive state
   const [currentSetIndex, setCurrentSetIndex] = useState<number>(1);
@@ -112,6 +113,7 @@ export default function MatchScoreManager({ tournamentId, onNext }: { tournament
       (snapshot) => {
         if (snapshot.exists()) {
           const data = snapshot.data();
+          setTournament({ id: snapshot.id, ...data });
           if (data && data.courts && Array.isArray(data.courts) && data.courts.length > 0) {
             setCourts(data.courts);
           }
@@ -175,11 +177,18 @@ export default function MatchScoreManager({ tournamentId, onNext }: { tournament
   }, [activeFixtureId, matches, fixtures]);
 
   // Helper to adjust team points
-  const adjustTeamPoints = async (winnerPlayerId: string, delta: number) => {
+  const adjustTeamPoints = async (winnerPlayerId: string, delta: number, fixture?: any) => {
+    if (fixture?.groupName?.toLowerCase().includes('family')) {
+      return;
+    }
     try {
       const teamsSnapshot = await getDocs(collection(db, `tournaments/${tournamentId}/teams`));
       const teamDoc = teamsSnapshot.docs.find(doc => doc.data().playerIds?.includes(winnerPlayerId));
       if (teamDoc) {
+        const teamData = teamDoc.data();
+        if (teamData?.name?.toLowerCase().includes('family')) {
+          return;
+        }
         await updateDoc(teamDoc.ref, { points: increment(delta) });
       }
     } catch (e) {
@@ -281,7 +290,7 @@ export default function MatchScoreManager({ tournamentId, onNext }: { tournament
         if (fixture) {
           const winnerPlayerId = existingMatch.winner === 'player1' ? fixture.player1Id : fixture.player2Id;
           // Subtract winner's team points
-          await adjustTeamPoints(winnerPlayerId, -5);
+          await adjustTeamPoints(winnerPlayerId, -5, fixture);
         }
         // Delete match document
         await deleteDoc(doc(db, `tournaments/${tournamentId}/matches`, existingMatch.id));
@@ -340,8 +349,8 @@ export default function MatchScoreManager({ tournamentId, onNext }: { tournament
 
         // Adjust team standings if winner changed
         if (oldWinnerPlayerId !== winnerPlayerId) {
-          await adjustTeamPoints(oldWinnerPlayerId, -5);
-          await adjustTeamPoints(winnerPlayerId, 5);
+          await adjustTeamPoints(oldWinnerPlayerId, -5, fixture);
+          await adjustTeamPoints(winnerPlayerId, 5, fixture);
         }
       } else {
         // Create new match document
@@ -355,7 +364,7 @@ export default function MatchScoreManager({ tournamentId, onNext }: { tournament
         });
 
         // Add 5 points to winning team
-        await adjustTeamPoints(winnerPlayerId, 5);
+        await adjustTeamPoints(winnerPlayerId, 5, fixture);
       }
 
       // Update fixture status to completed

@@ -19,7 +19,8 @@ const PREDEFINED_CATEGORIES = [
   "Family - Men's Doubles (Open)",
   "Family - Mixed Doubles (Open)",
   "Family - Kids' Singles (U12)",
-  "Family - Kids' Singles (U16)"
+  "Family - Kids' Singles (U16)",
+  "Family"
 ];
 
 function FormField({ label, required, children }: { label: string, required?: boolean, children: React.ReactNode }) {
@@ -336,10 +337,34 @@ export default function TournamentSetup({
       </div>
 
       <FormField label="Tournament Type" required>
-        <select value={formData.tournamentType} onChange={(e) => setFormData({ ...formData, tournamentType: e.target.value })} className="w-full p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+        <select 
+          value={formData.tournamentType} 
+          onChange={(e) => {
+            const val = e.target.value;
+            let override = {};
+            if (val === 'Round Robin A' || val === 'Qualify Only (Round Robin A)') {
+              override = {
+                matchFormat: 'Best of 3',
+                gamePoints: 15,
+                winPoints: 5,
+                lossPoints: 0,
+                maxPoint: 15,
+                winByTwo: true
+              };
+            }
+            setFormData({ 
+              ...formData, 
+              tournamentType: val,
+              ...override
+            });
+          }} 
+          className="w-full p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+        >
           <option>League</option>
           <option>Knockout</option>
           <option>League + Knockout</option>
+          <option>Round Robin A</option>
+          <option>Qualify Only (Round Robin A)</option>
         </select>
       </FormField>
       <FormField label="Match Format" required><input type="text" value={formData.matchFormat} onChange={(e) => setFormData({ ...formData, matchFormat: e.target.value })} className="w-full p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none" /></FormField>

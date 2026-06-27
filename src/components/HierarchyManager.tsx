@@ -8,7 +8,8 @@ import {
   query, 
   doc, 
   setDoc, 
-  deleteDoc 
+  deleteDoc,
+  getDocs
 } from 'firebase/firestore';
 import { 
   Users, 
@@ -25,12 +26,17 @@ import {
   ChevronRight,
   BookOpen,
   FolderOpen,
-  HelpCircle
+  HelpCircle,
+  Copy
 } from 'lucide-react';
 
 export default function HierarchyManager({ tournamentId }: { tournamentId?: string }) {
   const [viewMode, setViewMode] = useState<'editor' | 'chain' | 'points'>('chain');
   const [pointsSubTab, setPointsSubTab] = useState<'roots' | 'parents' | 'chapters'>('chapters');
+  const [copySourceTournamentId, setCopySourceTournamentId] = useState<string>('');
+  const [showCopyConfirm, setShowCopyConfirm] = useState(false);
+  const [isCopying, setIsCopying] = useState(false);
+  const [copyStatusMessage, setCopyStatusMessage] = useState<string | null>(null);
   const [roots, setRoots] = useState<any[]>([]);
   const [selectedRootId, setSelectedRootId] = useState<string | null>(null);
   const [level1, setLevel1] = useState<any[]>([]);
@@ -287,6 +293,96 @@ export default function HierarchyManager({ tournamentId }: { tournamentId?: stri
     };
   }, [selectedRootId, level1, allLevel2, selectedTournamentId]);
 
+  // Copy Hierarchy Function
+  const handleCopyHierarchy = async () => {
+    if (!copySourceTournamentId) {
+      setErrorText("Please select a source tournament to copy from.");
+      return;
+    }
+    if (!selectedTournamentId) {
+      setErrorText("No target tournament selected.");
+      return;
+    }
+    if (copySourceTournamentId === selectedTournamentId) {
+      setErrorText("Cannot copy a tournament to itself.");
+      return;
+    }
+
+    setIsCopying(true);
+    setCopyStatusMessage("Starting copy process...");
+    setErrorText(null);
+    setShowCopyConfirm(false);
+
+    try {
+      // 1. Fetch all roots from the source tournament
+      const sourceRootsSnap = await getDocs(collection(db, `tournaments/${copySourceTournamentId}/roots`));
+      const sourceRoots = sourceRootsSnap.docs.map(d => ({ id: d.id, ...d.data() } as any));
+
+      if (sourceRoots.length === 0) {
+        setCopyStatusMessage(null);
+        setErrorText("The selected tournament does not have any roots/hierarchy to copy.");
+        setIsCopying(false);
+        return;
+      }
+
+      let copiedRootsCount = 0;
+      let copiedL1Count = 0;
+      let copiedL2Count = 0;
+
+      for (const root of sourceRoots) {
+        setCopyStatusMessage(`Copying Root: ${root.name || root.id}...`);
+        
+        // Save Root with same ID to the target tournament
+        const targetRootRef = doc(db, `tournaments/${selectedTournamentId}/roots`, root.id);
+        await setDoc(targetRootRef, {
+          name: root.name || ''
+        });
+        copiedRootsCount++;
+
+        // 2. Fetch all Level 1 (Parent Teams) for this root
+        const sourceL1Snap = await getDocs(collection(db, `tournaments/${copySourceTournamentId}/roots/${root.id}/level1`));
+        const sourceL1List = sourceL1Snap.docs.map(d => ({ id: d.id, ...d.data() } as any));
+
+        for (const l1 of sourceL1List) {
+          // Save Level 1 with same ID under the copied Root
+          const targetL1Ref = doc(db, `tournaments/${selectedTournamentId}/roots/${root.id}/level1`, l1.id);
+          await setDoc(targetL1Ref, {
+            name: l1.name || '',
+            rootId: root.id
+          });
+          copiedL1Count++;
+
+          // 3. Fetch all Level 2 (Chapters) for this Level 1
+          const sourceL2Snap = await getDocs(collection(db, `tournaments/${copySourceTournamentId}/roots/${root.id}/level1/${l1.id}/level2`));
+          const sourceL2List = sourceL2Snap.docs.map(d => ({ id: d.id, ...d.data() } as any));
+
+          for (const l2 of sourceL2List) {
+            // Save Level 2 with same ID under the copied Level 1
+            const targetL2Ref = doc(db, `tournaments/${selectedTournamentId}/roots/${root.id}/level1/${l1.id}/level2`, l2.id);
+            await setDoc(targetL2Ref, {
+              name: l2.name || '',
+              level1Id: l1.id
+            });
+            copiedL2Count++;
+          }
+        }
+      }
+
+      setCopyStatusMessage(`Successfully copied setup: ${copiedRootsCount} Roots, ${copiedL1Count} Parent Teams, and ${copiedL2Count} Chapters!`);
+      setCopySourceTournamentId('');
+      // Clear status message after 4 seconds
+      setTimeout(() => {
+        setCopyStatusMessage(null);
+      }, 4000);
+    } catch (e: any) {
+      console.error("Error during copy hierarchy operation:", e);
+      setErrorText(`Copy failed: ${e?.message || String(e)}`);
+      setCopyStatusMessage(null);
+    } finally {
+      setIsCopying(false);
+    }
+  };
+
   // Submit functions
   const submitRoot = async () => { 
     if (!selectedTournamentId) {
@@ -464,8 +560,29 @@ export default function HierarchyManager({ tournamentId }: { tournamentId?: stri
       playerStats[p.id] = { wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0, points: 0 };
     });
 
-    const getWinPoints = (type?: string) => {
+    const getWinPoints = (type?: string, playerId?: string, groupName?: string) => {
+      if (groupName?.toLowerCase().includes('family')) {
+        return 0;
+      }
+      if (playerId) {
+        const assignment = allRootsPlayers.find(ap => ap.id === playerId);
+        if (assignment) {
+          const root = roots.find(r => r.id === assignment.rootId);
+          const level1 = allRootsLevel1.find(l1 => l1.id === assignment.level1Id);
+          const level2 = allRootsLevel2.find(l2 => l2.id === assignment.level2Id);
+
+          if (
+            root?.name?.toLowerCase().includes('family') ||
+            level1?.name?.toLowerCase().includes('family') ||
+            level2?.name?.toLowerCase().includes('family')
+          ) {
+            return 0;
+          }
+        }
+      }
+
       const t = type?.toLowerCase() || 'league';
+      if (t.includes('pre_quarter') || t.includes('pre-quarter') || t.includes('pre quarter')) return 5;
       if (t.includes('quarter') || t.includes('quater')) return 10;
       if (t.includes('semi')) return 15;
       if (t.includes('final')) return 25;
@@ -479,7 +596,8 @@ export default function HierarchyManager({ tournamentId }: { tournamentId?: stri
       const p1Id = fixture.player1Id;
       const p2Id = fixture.player2Id;
       const s = match.scores || {};
-      const winPoints = getWinPoints(fixture.matchType);
+      const winPointsP1 = getWinPoints(fixture.matchType, p1Id, fixture.groupName);
+      const winPointsP2 = getWinPoints(fixture.matchType, p2Id, fixture.groupName);
 
       if (p1Id && !playerStats[p1Id]) {
         playerStats[p1Id] = { wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0, points: 0 };
@@ -492,7 +610,7 @@ export default function HierarchyManager({ tournamentId }: { tournamentId?: stri
       if (p1Id) {
         if (match.winner === 'player1') {
           playerStats[p1Id].wins++;
-          playerStats[p1Id].points += winPoints;
+          playerStats[p1Id].points += winPointsP1;
         } else if (match.winner === 'player2') {
           playerStats[p1Id].losses++;
         }
@@ -507,7 +625,7 @@ export default function HierarchyManager({ tournamentId }: { tournamentId?: stri
       if (p2Id) {
         if (match.winner === 'player2') {
           playerStats[p2Id].wins++;
-          playerStats[p2Id].points += winPoints;
+          playerStats[p2Id].points += winPointsP2;
         } else if (match.winner === 'player1') {
           playerStats[p2Id].losses++;
         }
@@ -1018,6 +1136,101 @@ export default function HierarchyManager({ tournamentId }: { tournamentId?: stri
         </div>
       ) : viewMode === 'editor' ? (
         <div className="space-y-6">
+          {/* Copy Setup Panel */}
+          <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-4">
+            <div className="flex items-center gap-2">
+              <div className="p-2 bg-indigo-50 rounded-xl text-indigo-600">
+                <Copy className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-800 text-sm uppercase tracking-wider">Copy Hierarchy Setup</h3>
+                <p className="text-xs text-slate-500">Replicate the complete Roots, Parent Teams (L1), and Chapters (L2) setup with identical IDs from another tournament.</p>
+              </div>
+            </div>
+            
+            {!showCopyConfirm ? (
+              <div className="flex flex-col sm:flex-row gap-3 items-end sm:items-center">
+                <div className="flex-1 w-full space-y-1">
+                  <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">Source Tournament</label>
+                  <select
+                    value={copySourceTournamentId}
+                    onChange={(e) => {
+                      setCopySourceTournamentId(e.target.value);
+                      setErrorText(null);
+                    }}
+                    className="w-full border border-slate-200 p-2.5 rounded-xl text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
+                    disabled={isCopying}
+                  >
+                    <option value="">-- Select Tournament to Copy --</option>
+                    {tournaments
+                      .filter(t => t.id !== selectedTournamentId)
+                      .map(t => (
+                        <option key={t.id} value={t.id}>
+                          {t.name || t.id}
+                        </option>
+                      ))
+                    }
+                  </select>
+                </div>
+                
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!copySourceTournamentId) {
+                      setErrorText("Please select a source tournament to copy from.");
+                      return;
+                    }
+                    setErrorText(null);
+                    setShowCopyConfirm(true);
+                  }}
+                  disabled={isCopying || !copySourceTournamentId}
+                  className="w-full sm:w-auto px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-2 transition disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed shadow-sm shrink-0 font-sans"
+                >
+                  <Copy className="w-4 h-4" />
+                  Copy & Save Setup
+                </button>
+              </div>
+            ) : (
+              <div className="bg-amber-50 border border-amber-100 p-4 rounded-xl space-y-3">
+                <p className="text-xs text-amber-800 font-medium leading-relaxed">
+                  Are you sure you want to copy the organizational hierarchy? This will save all Roots, Parent Teams (L1), and Chapters (L2) from the selected tournament into the current tournament with the same IDs.
+                </p>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={handleCopyHierarchy}
+                    disabled={isCopying}
+                    className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl transition shadow-sm flex items-center gap-1.5"
+                  >
+                    {isCopying ? (
+                      <>
+                        <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Copying...
+                      </>
+                    ) : (
+                      "Yes, Copy Setup"
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowCopyConfirm(false)}
+                    disabled={isCopying}
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {copyStatusMessage && (
+              <div className="text-xs font-semibold text-emerald-600 bg-emerald-50 px-3.5 py-2.5 rounded-xl border border-emerald-100 flex items-center gap-2 animate-pulse">
+                <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
+                <span>{copyStatusMessage}</span>
+              </div>
+            )}
+          </div>
+
           {/* 3-Column Hierarchy Builder */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             

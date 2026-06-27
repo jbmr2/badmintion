@@ -225,11 +225,18 @@ export default function RefereePanel({ tournamentId }: RefereePanelProps) {
   };
 
   // Adjust team points in standings
-  const adjustTeamPoints = async (winnerPlayerId: string, delta: number) => {
+  const adjustTeamPoints = async (winnerPlayerId: string, delta: number, fixture?: any) => {
+    if (fixture?.groupName?.toLowerCase().includes('family')) {
+      return;
+    }
     try {
       const teamsSnapshot = await getDocs(collection(db, `tournaments/${tournamentId}/teams`));
       const teamDoc = teamsSnapshot.docs.find(doc => doc.data().playerIds?.includes(winnerPlayerId));
       if (teamDoc) {
+        const teamData = teamDoc.data();
+        if (teamData?.name?.toLowerCase().includes('family')) {
+          return;
+        }
         await updateDoc(teamDoc.ref, { points: increment(delta) });
       }
     } catch (e) {
@@ -282,7 +289,7 @@ export default function RefereePanel({ tournamentId }: RefereePanelProps) {
       const existingMatch = matches.find(m => m.fixtureId === activeFixture.id);
       if (existingMatch) {
         const winnerPlayerId = existingMatch.winner === 'player1' ? activeFixture.player1Id : activeFixture.player2Id;
-        await adjustTeamPoints(winnerPlayerId, -5);
+        await adjustTeamPoints(winnerPlayerId, -5, activeFixture);
         await deleteDoc(doc(db, `tournaments/${tournamentId}/matches`, existingMatch.id));
       }
 
@@ -356,8 +363,8 @@ export default function RefereePanel({ tournamentId }: RefereePanelProps) {
         });
 
         if (oldWinnerPlayerId !== winnerPlayerId) {
-          await adjustTeamPoints(oldWinnerPlayerId, -5);
-          await adjustTeamPoints(winnerPlayerId, 5);
+          await adjustTeamPoints(oldWinnerPlayerId, -5, activeFixture);
+          await adjustTeamPoints(winnerPlayerId, 5, activeFixture);
         }
       } else {
         // Create new match doc
@@ -370,7 +377,7 @@ export default function RefereePanel({ tournamentId }: RefereePanelProps) {
           maxPoints: target
         });
 
-        await adjustTeamPoints(winnerPlayerId, 5);
+        await adjustTeamPoints(winnerPlayerId, 5, activeFixture);
       }
 
       // 2. Update fixture

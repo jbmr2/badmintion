@@ -4,7 +4,7 @@ import { collection, addDoc, onSnapshot, query, updateDoc, doc, arrayUnion } fro
 
 const PREDEFINED_CATEGORIES = [
   "Men's Singles", "Women's Singles", "Men's Doubles", "Women's Doubles", 
-  "Mixed Doubles", "U13", "U15", "U17", "U19", "Open"
+  "Mixed Doubles", "U13", "U15", "U17", "U19", "Open", "Family"
 ];
 
 export default function CategoryManager({ tournamentId, onNext }: { tournamentId: string, onNext: () => void }) {

@@ -4,6 +4,36 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>My Google AI Studio App</title>
+    <script>
+      // Early suppression of benign development-only WebSocket/HMR disconnect errors
+      (function() {
+        const isBenign = (str) => {
+          if (!str) return false;
+          const s = String(str).toLowerCase();
+          return (
+            s.includes('websocket') || 
+            s.includes('vite') || 
+            s.includes('hmr') || 
+            s.includes('closed without opened')
+          );
+        };
+        window.addEventListener('unhandledrejection', function(e) {
+          const reason = e.reason;
+          const msg = (reason && (reason.message || reason.stack)) || String(reason || '');
+          if (isBenign(msg)) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+          }
+        }, true);
+        window.addEventListener('error', function(e) {
+          const msg = e.message || (e.error && (e.error.message || e.error.stack)) || '';
+          if (isBenign(msg)) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+          }
+        }, true);
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

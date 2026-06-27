@@ -9,7 +9,7 @@ export default function FixtureManager({ tournamentId, onNext }: { tournamentId:
   const [manualPlayer2, setManualPlayer2] = useState('');
   const [manualGroup, setManualGroup] = useState('');
   const [pointsTarget, setPointsTarget] = useState('15');
-  const [matchType, setMatchType] = useState<'league' | 'quarter' | 'semi' | 'final'>('league');
+  const [matchType, setMatchType] = useState<'league' | 'pre_quarter' | 'quarter' | 'semi' | 'final'>('league');
   const [groups, setGroups] = useState<any[]>([]);
   const [editingFixture, setEditingFixture] = useState<any | null>(null);
   const [manualCourt, setManualCourt] = useState('');
@@ -172,6 +172,7 @@ export default function FixtureManager({ tournamentId, onNext }: { tournamentId:
           </select>
           <select value={matchType} onChange={e => setMatchType(e.target.value as any)} className="border border-slate-300 p-3 rounded-xl focus:ring-2 focus:ring-indigo-500">
             <option value="league">League</option>
+            <option value="pre_quarter">Pre-Quarter Final</option>
             <option value="quarter">Quarter Final</option>
             <option value="semi">Semi Final</option>
             <option value="final">Final</option>

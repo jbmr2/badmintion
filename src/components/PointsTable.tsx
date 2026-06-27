@@ -39,6 +39,7 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
   const [fixtures, setFixtures] = useState<any[]>([]);
   const [groups, setGroups] = useState<any[]>([]);
   const [players, setPlayers] = useState<any[]>([]);
+  const [tournament, setTournament] = useState<any | null>(null);
   const [generating, setGenerating] = useState(false);
   const [activeTab, setActiveTab] = useState<'standings' | 'brackets' | 'schedule'>('standings');
   const [fixtureToDelete, setFixtureToDelete] = useState<any | null>(null);
@@ -46,7 +47,7 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
   // Manual scheduling state
   const [selectedP1, setSelectedP1] = useState('');
   const [selectedP2, setSelectedP2] = useState('');
-  const [selectedStage, setSelectedStage] = useState<'quarter' | 'semi' | 'final'>('quarter');
+  const [selectedStage, setSelectedStage] = useState<'pre_quarter' | 'quarter' | 'semi' | 'final'>('quarter');
   const [pointsTarget, setPointsTarget] = useState('21');
 
   useEffect(() => {
@@ -70,11 +71,18 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
         setPlayers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
 
+    const unsubscribeTournament = onSnapshot(doc(db, 'tournaments', tournamentId), (snapshot) => {
+        if (snapshot.exists()) {
+          setTournament({ id: snapshot.id, ...snapshot.data() });
+        }
+    });
+
     return () => {
         unsubscribeMatches();
         unsubscribeFixtures();
         unsubscribeGroups();
         unsubscribePlayers();
+        unsubscribeTournament();
     };
   }, [tournamentId]);
 
@@ -170,11 +178,15 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
   });
 
   // Calculate sorted rankings for each group
+  const isRoundRobinA = tournament?.tournamentType?.toLowerCase().includes('round robin a') || tournament?.tournamentType?.toLowerCase().includes('robin a');
+  const winPointsValue = tournament?.winPoints !== undefined ? Number(tournament.winPoints) : 2;
+  const lossPointsValue = tournament?.lossPoints !== undefined ? Number(tournament.lossPoints) : 0;
+
   const groupRankings: Record<string, StandingPlayer[]> = {};
   Object.entries(groupedStats).forEach(([groupName, groupPlayers]) => {
     groupRankings[groupName] = Object.entries(groupPlayers).map(([playerName, stats]: any) => {
       const played = stats.wins + stats.losses;
-      const matchPoints = stats.wins * 2;
+      const matchPoints = (stats.wins * winPointsValue) + (stats.losses * lossPointsValue);
       const gameDiff = stats.gamesWon - stats.gamesLost;
       const pointDiff = stats.pointsScored - stats.pointsAgainst;
       return {
@@ -192,6 +204,11 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
         pointDiff
       };
     }).sort((a, b) => {
+      // If Round Robin A, sort by Wins first
+      if (isRoundRobinA) {
+        if (b.wins !== a.wins) return b.wins - a.wins;
+      }
+      
       // 1. Sort by total match points
       if (b.matchPoints !== a.matchPoints) return b.matchPoints - a.matchPoints;
       // 2. Sort by overall game difference
@@ -204,6 +221,7 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
   });
 
   // Filter fixtures by stage/matchType
+  const preQuarters = fixtures.filter(f => f.matchType === 'pre_quarter');
   const quarters = fixtures.filter(f => f.matchType === 'quarter');
   const semis = fixtures.filter(f => f.matchType === 'semi');
   const finals = fixtures.filter(f => f.matchType === 'final');
@@ -234,7 +252,7 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
     }
     try {
       setGenerating(true);
-      const stageLabels = { quarter: 'Quarter Finals', semi: 'Semi Finals', final: 'Finals' };
+      const stageLabels = { pre_quarter: 'Pre-Quarters', quarter: 'Quarter Finals', semi: 'Semi Finals', final: 'Finals' };
       const docRef = await addDoc(collection(db, `tournaments/${tournamentId}/fixtures`), {
         player1Id: selectedP1,
         player1Name: playerMap[selectedP1],
@@ -259,7 +277,141 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
   };
 
   // Automated Bracket Generation triggers
+  const autoGeneratePreQuarters = async () => {
+    const sortedGroups = Object.keys(groupRankings).sort();
+    if (sortedGroups.length < 2) {
+      alert("You need at least 2 groups with matches to automatically seed Pre-Quarters.");
+      return;
+    }
+
+    try {
+      setGenerating(true);
+      const batch = writeBatch(db);
+      const fixturesCol = collection(db, `tournaments/${tournamentId}/fixtures`);
+
+      const pairings: Array<{ p1: StandingPlayer; p2: StandingPlayer }> = [];
+
+      // If we have 2 groups: top 8 of Group A vs top 8 of Group B
+      if (sortedGroups.length === 2) {
+        const gA = groupRankings[sortedGroups[0]] || [];
+        const gB = groupRankings[sortedGroups[1]] || [];
+        for (let i = 0; i < 8; i++) {
+          if (gA[i] && gB[7 - i]) {
+            pairings.push({ p1: gA[i], p2: gB[7 - i] });
+          }
+        }
+      } else if (sortedGroups.length === 4) {
+        const gA = groupRankings[sortedGroups[0]] || [];
+        const gB = groupRankings[sortedGroups[1]] || [];
+        const gC = groupRankings[sortedGroups[2]] || [];
+        const gD = groupRankings[sortedGroups[3]] || [];
+        
+        if (gA[0] && gB[3]) pairings.push({ p1: gA[0], p2: gB[3] });
+        if (gA[1] && gB[2]) pairings.push({ p1: gA[1], p2: gB[2] });
+        if (gB[0] && gA[3]) pairings.push({ p1: gB[0], p2: gA[3] });
+        if (gB[1] && gA[2]) pairings.push({ p1: gB[1], p2: gA[2] });
+
+        if (gC[0] && gD[3]) pairings.push({ p1: gC[0], p2: gD[3] });
+        if (gC[1] && gD[2]) pairings.push({ p1: gC[1], p2: gD[2] });
+        if (gD[0] && gC[3]) pairings.push({ p1: gD[0], p2: gC[3] });
+        if (gD[1] && gC[2]) pairings.push({ p1: gD[1], p2: gC[2] });
+      } else {
+        // Fallback pair adjacent groups
+        for (let gIdx = 0; gIdx < sortedGroups.length; gIdx += 2) {
+          if (sortedGroups[gIdx] && sortedGroups[gIdx + 1]) {
+            const g1 = groupRankings[sortedGroups[gIdx]] || [];
+            const g2 = groupRankings[sortedGroups[gIdx + 1]] || [];
+            if (g1[0] && g2[1]) pairings.push({ p1: g1[0], p2: g2[1] });
+            if (g2[0] && g1[1]) pairings.push({ p1: g2[0], p2: g1[1] });
+          }
+        }
+      }
+
+      if (pairings.length === 0) {
+        alert("Standings are empty or insufficient players. Please input league match scores first to find group leaders.");
+        setGenerating(false);
+        return;
+      }
+
+      for (let i = 0; i < pairings.length; i++) {
+        const { p1, p2 } = pairings[i];
+        const newDocRef = doc(fixturesCol);
+        batch.set(newDocRef, {
+          player1Id: p1.playerId,
+          player1Name: p1.playerName,
+          player2Id: p2.playerId,
+          player2Name: p2.playerName,
+          groupName: 'Pre-Quarters',
+          matchType: 'pre_quarter',
+          pointsTarget: '15',
+          status: 'pending',
+          scores: { p1g1: 0, p2g1: 0, p1g2: 0, p2g2: 0, p1g3: 0, p2g3: 0 },
+          matchId: generateShortId()
+        });
+      }
+
+      await batch.commit();
+      setActiveTab('brackets');
+      alert(`Successfully generated ${pairings.length} Pre-Quarter matches!`);
+    } catch (e) {
+      console.error("Error auto generating pre-quarters:", e);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
   const autoGenerateQuarters = async () => {
+    if (preQuarters.length > 0) {
+      try {
+        setGenerating(true);
+        const batch = writeBatch(db);
+        const fixturesCol = collection(db, `tournaments/${tournamentId}/fixtures`);
+
+        const completedPreQuarters = preQuarters.filter(q => q.status === 'completed');
+        if (completedPreQuarters.length < preQuarters.length) {
+          if (!window.confirm(`Only ${completedPreQuarters.length} of ${preQuarters.length} Pre-Quarters are finished. Proceed using current winners?`)) {
+            setGenerating(false);
+            return;
+          }
+        }
+
+        const winners = preQuarters.map(q => getFixtureWinner(q)).filter(Boolean);
+        if (winners.length < 2) {
+          alert("At least 2 Pre-Quarter winners are required to seed Quarter-Finals.");
+          setGenerating(false);
+          return;
+        }
+
+        // Pair up: PQ1 Winner vs PQ2 Winner, PQ3 Winner vs PQ4 Winner, etc.
+        for (let i = 0; i < winners.length; i += 2) {
+          if (winners[i] && winners[i + 1]) {
+            const newDocRef = doc(fixturesCol);
+            batch.set(newDocRef, {
+              player1Id: winners[i]?.id,
+              player1Name: winners[i]?.name,
+              player2Id: winners[i + 1]?.id,
+              player2Name: winners[i + 1]?.name,
+              groupName: 'Quarter Finals',
+              matchType: 'quarter',
+              pointsTarget: '15',
+              status: 'pending',
+              scores: { p1g1: 0, p2g1: 0, p1g2: 0, p2g2: 0, p1g3: 0, p2g3: 0 },
+              matchId: generateShortId()
+            });
+          }
+        }
+
+        await batch.commit();
+        setActiveTab('brackets');
+        alert(`Successfully generated Quarter Final matches from Pre-Quarter winners!`);
+      } catch (e) {
+        console.error("Error auto generating quarters from pre quarters:", e);
+      } finally {
+        setGenerating(false);
+      }
+      return;
+    }
+
     const sortedGroups = Object.keys(groupRankings).sort();
     if (sortedGroups.length < 2) {
       alert("You need at least 2 groups with matches to automatically seed Quarter-Finals.");
@@ -692,7 +844,7 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
             className="space-y-6"
           >
             {/* Quick alert if no brackets scheduled */}
-            {quarters.length === 0 && semis.length === 0 && finals.length === 0 && (
+            {preQuarters.length === 0 && quarters.length === 0 && semis.length === 0 && finals.length === 0 && (
               <div className="bg-slate-50 border border-slate-200 p-8 rounded-3xl text-center">
                 <AlertCircle className="w-10 h-10 text-slate-400 mx-auto mb-3" />
                 <h4 className="font-extrabold text-slate-800">No Bracket Matches Scheduled</h4>
@@ -709,8 +861,70 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
             )}
 
             {/* Bracket columns mapping */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
+            <div className={`grid grid-cols-1 ${preQuarters.length > 0 ? 'md:grid-cols-4' : 'md:grid-cols-3'} gap-6 items-start`}>
               
+              {/* STAGE PRE-QUARTER: PRE-QUARTERS */}
+              {preQuarters.length > 0 && (
+                <div className="space-y-4">
+                  <div className="bg-slate-900 text-white p-3.5 rounded-2xl flex items-center justify-between shadow-sm">
+                    <span className="font-black text-xs uppercase tracking-widest text-indigo-400">Pre-Quarters</span>
+                    <span className="text-[10px] bg-indigo-950 px-2 py-0.5 rounded font-bold font-mono">{preQuarters.length} Matches</span>
+                  </div>
+
+                  <div className="space-y-3.5">
+                    {preQuarters.map((f, idx) => {
+                      const winner = getFixtureWinner(f);
+                      return (
+                        <div key={f.id} className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm relative group overflow-hidden">
+                          {/* Match Header info */}
+                          <div className="flex justify-between items-center text-[9px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-1.5 mb-2.5">
+                            <span>MATCH {idx + 1} ({f.pointsTarget || '15'} pts) {f.court ? `• ${f.court}` : ''}</span>
+                            <button 
+                              onClick={() => setFixtureToDelete(f)}
+                              className="text-slate-300 hover:text-rose-500 transition opacity-0 group-hover:opacity-100"
+                              title="Delete Fixture"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+
+                          {/* Players row */}
+                          <div className="space-y-2">
+                            {/* Player 1 */}
+                            <div className="flex justify-between items-center text-xs">
+                              <span className={`font-extrabold truncate max-w-[130px] ${
+                                winner?.key === 'player1' ? 'text-indigo-600 font-black' : 'text-slate-700'
+                              }`}>
+                                {f.player1Name}
+                              </span>
+                              <span className="font-mono text-[10px] text-slate-400 font-bold bg-slate-50 px-1.5 py-0.5 rounded">
+                                {f.scores?.p1g1 || 0}-{f.scores?.p2g1 || 0} , {f.scores?.p1g2 || 0}-{f.scores?.p2g2 || 0}
+                              </span>
+                            </div>
+
+                            {/* Player 2 */}
+                            <div className="flex justify-between items-center text-xs">
+                              <span className={`font-extrabold truncate max-w-[130px] ${
+                                winner?.key === 'player2' ? 'text-indigo-600 font-black' : 'text-slate-700'
+                              }`}>
+                                {f.player2Name}
+                              </span>
+                              <span className="font-mono text-xs text-indigo-600 font-black">
+                                {f.status === 'completed' && winner ? (
+                                  <span className="px-1.5 py-0.5 bg-indigo-50 border border-indigo-100 rounded text-[9px] uppercase tracking-wide">Winner</span>
+                                ) : (
+                                  <span className="text-[10px] text-slate-400 capitalize font-bold">{f.status || 'Pending'}</span>
+                                )}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               {/* STAGE A: QUARTER FINALS */}
               <div className="space-y-4">
                 <div className="bg-slate-900 text-white p-3.5 rounded-2xl flex items-center justify-between shadow-sm">
@@ -944,6 +1158,21 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
                 </p>
 
                 <div className="space-y-3">
+                  {/* Pre-Quarters Seeding Card */}
+                  <div className="border border-slate-150 rounded-2xl p-4 bg-slate-50/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div>
+                      <h4 className="font-black text-xs uppercase tracking-wider text-slate-800">Pre-Quarter Finals (Top 16)</h4>
+                      <p className="text-[10px] text-slate-500 font-medium mt-0.5">Seedy crossover: Top players from Group A and Group B paired up.</p>
+                    </div>
+                    <button
+                      onClick={autoGeneratePreQuarters}
+                      disabled={generating}
+                      className="px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white font-black text-xs rounded-xl shadow-sm transition shrink-0 disabled:opacity-50"
+                    >
+                      {generating ? "Seeding..." : "Auto-Seed PQ"}
+                    </button>
+                  </div>
+
                   {/* Quarters Seeding Card */}
                   <div className="border border-slate-150 rounded-2xl p-4 bg-slate-50/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <div>
@@ -1042,6 +1271,7 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
                         onChange={e => setSelectedStage(e.target.value as any)} 
                         className="w-full border border-slate-200 p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
                       >
+                        <option value="pre_quarter">Pre-Quarter</option>
                         <option value="quarter">Quarter Final</option>
                         <option value="semi">Semi Final</option>
                         <option value="final">Final</option>
