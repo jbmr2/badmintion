@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { 
@@ -8,7 +8,8 @@ import {
   doc, 
   setDoc, 
   updateDoc, 
-  deleteDoc 
+  deleteDoc,
+  getDoc
 } from 'firebase/firestore';
 import { 
   User, 
@@ -25,15 +26,33 @@ import {
   Calendar,
   Layers,
   Save,
-  Undo2
+  Undo2,
+  Phone,
+  FileSpreadsheet,
+  Upload,
+  Check,
+  AlertTriangle,
+  RefreshCw,
+  FileText
 } from 'lucide-react';
 
 export default function PlayerManager({ tournamentId }: { tournamentId: string }) {
   const [players, setPlayers] = useState<any[]>([]);
-  const [player, setPlayer] = useState({ name: '', age: '' });
+  const [player, setPlayer] = useState({ name: '', age: '', mobile: '' });
   const [selectedChapterId, setSelectedChapterId] = useState<string>('');
   const [selectedGroupId, setSelectedGroupId] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
+  
+  // Bulk import states
+  const [importMode, setImportMode] = useState<'single' | 'bulk'>('single');
+  const [bulkText, setBulkText] = useState('');
+  const [parsedPlayers, setParsedPlayers] = useState<any[]>([]);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState(0);
+
+  // Master profile lookup states
+  const [isSearchingMobile, setIsSearchingMobile] = useState(false);
+  const [matchedMasterProfile, setMatchedMasterProfile] = useState<{ name: string; age: string; mobile: string } | null>(null);
   
   // Group tracking states
   const [groups, setGroups] = useState<any[]>([]);
@@ -46,8 +65,20 @@ export default function PlayerManager({ tournamentId }: { tournamentId: string }
 
   // Editing state
   const [editingPlayerId, setEditingPlayerId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ name: '', age: '', chapterId: '', groupId: '' });
+  const [editForm, setEditForm] = useState({ name: '', age: '', mobile: '', chapterId: '', groupId: '' });
   const [playerToDelete, setPlayerToDelete] = useState<any | null>(null);
+
+  // Master Global Registry state
+  const [masterRegistry, setMasterRegistry] = useState<any[]>([]);
+
+  // Fetch Master Registry profiles
+  useEffect(() => {
+    const q = query(collection(db, 'players'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setMasterRegistry(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (err) => console.error("Error loading master players in PlayerManager:", err));
+    return () => unsubscribe();
+  }, []);
 
   // 1. Fetch Players list
   useEffect(() => {
@@ -60,12 +91,92 @@ export default function PlayerManager({ tournamentId }: { tournamentId: string }
     return () => unsubscribe();
   }, [tournamentId]);
 
+  // Real-time lookup of master player profile by mobile number (debounced)
+  useEffect(() => {
+    const cleaned = player.mobile.trim().replace(/[^0-9+]/g, '');
+    if (cleaned.length < 5) {
+      setMatchedMasterProfile(null);
+      return;
+    }
+
+    // Skip if we already matched this exact number to prevent unnecessary loops
+    if (matchedMasterProfile && matchedMasterProfile.mobile === cleaned) {
+      return;
+    }
+
+    const delayDebounce = setTimeout(async () => {
+      setIsSearchingMobile(true);
+      try {
+        const docRef = doc(db, 'players', cleaned);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          const master = {
+            name: data.name || '',
+            age: data.age !== undefined && data.age !== null ? String(data.age) : '',
+            mobile: cleaned,
+            l2: data.l2 || ''
+          };
+          setMatchedMasterProfile(master);
+          
+          // Auto-fill form fields if they are currently blank
+          setPlayer(prev => ({
+            ...prev,
+            name: prev.name.trim() === '' ? master.name : prev.name,
+            age: prev.age.trim() === '' ? master.age : prev.age
+          }));
+
+          // Auto-select the Level 2 Chapter/Category if matched!
+          if (master.l2) {
+            const matchedChapter = allRootsLevel2.find(c => c.name.toLowerCase() === master.l2.toLowerCase());
+            if (matchedChapter) {
+              setSelectedChapterId(matchedChapter.id);
+            }
+          }
+        } else {
+          setMatchedMasterProfile(null);
+        }
+      } catch (err) {
+        console.error("Error looking up master profile:", err);
+      } finally {
+        setIsSearchingMobile(false);
+      }
+    }, 450);
+
+    return () => clearTimeout(delayDebounce);
+  }, [player.mobile]);
+
   // 1b. Fetch Groups list
   useEffect(() => {
     if (!tournamentId) return;
     const q = query(collection(db, `tournaments/${tournamentId}/groups`));
     const unsubscribe = onSnapshot(q, 
-      (snapshot) => setGroups(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))),
+      (snapshot) => {
+        const fetchedGroups = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
+        const uniqueGroups: any[] = [];
+        const seenNames = new Set<string>();
+        fetchedGroups.forEach(g => {
+          const nameLower = (g.name || '').trim().toLowerCase();
+          if (nameLower && !seenNames.has(nameLower)) {
+            seenNames.add(nameLower);
+            uniqueGroups.push({
+              id: g.id,
+              name: g.name,
+              playerIds: g.playerIds || []
+            });
+          } else if (nameLower) {
+            // Merge playerIds to keep assignments accurate
+            const existing = uniqueGroups.find(x => x.name.trim().toLowerCase() === nameLower);
+            if (existing) {
+              existing.playerIds = Array.from(new Set([
+                ...(existing.playerIds || []),
+                ...(g.playerIds || [])
+              ]));
+            }
+          }
+        });
+        setGroups(uniqueGroups);
+      },
       (error) => console.error("Error fetching groups:", error)
     );
     return () => unsubscribe();
@@ -156,6 +267,20 @@ export default function PlayerManager({ tournamentId }: { tournamentId: string }
   // Create player + optional assignment
   const handleAdd = async () => {
     if (!player.name.trim()) return;
+    
+    const mobileTrimmed = player.mobile.trim();
+    if (!mobileTrimmed) {
+      alert("Mobile number is required as a unique player ID.");
+      return;
+    }
+
+    // Uniqueness validation
+    const isMobileDuplicate = players.some(p => p.mobile && p.mobile.trim() === mobileTrimmed);
+    if (isMobileDuplicate) {
+      alert("This mobile number is already registered for another player. Mobile numbers must be unique.");
+      return;
+    }
+
     try {
       // Generate standard ID
       const playersCol = collection(db, `tournaments/${tournamentId}/players`);
@@ -165,11 +290,30 @@ export default function PlayerManager({ tournamentId }: { tournamentId: string }
       const playerData = {
         name: player.name.trim(),
         age: player.age ? Number(player.age) : '',
+        mobile: mobileTrimmed,
         createdAt: new Date().toISOString()
       };
 
       // Set main player
       await setDoc(newPlayerRef, playerData);
+
+      // Sync to global master players registry (keyed by mobile)
+      const globalPlayerRef = doc(db, 'players', mobileTrimmed);
+      let globalL2 = "";
+      if (selectedChapterId) {
+        const chapter = allRootsLevel2.find(c => c.id === selectedChapterId);
+        if (chapter) {
+          globalL2 = chapter.name;
+        }
+      }
+
+      await setDoc(globalPlayerRef, {
+        name: playerData.name,
+        age: playerData.age,
+        mobile: playerData.mobile,
+        ...(globalL2 ? { l2: globalL2 } : {}),
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
 
       // If chapter assignment selected
       if (selectedChapterId) {
@@ -179,6 +323,7 @@ export default function PlayerManager({ tournamentId }: { tournamentId: string }
           await setDoc(rosterRef, {
             name: playerData.name,
             age: playerData.age,
+            mobile: playerData.mobile,
             assignedAt: new Date().toISOString()
           });
         }
@@ -195,9 +340,10 @@ export default function PlayerManager({ tournamentId }: { tournamentId: string }
         }
       }
 
-      setPlayer({ name: '', age: '' });
+      setPlayer({ name: '', age: '', mobile: '' });
       setSelectedChapterId('');
       setSelectedGroupId('');
+      setMatchedMasterProfile(null);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, `tournaments/${tournamentId}/players`);
     }
@@ -235,15 +381,48 @@ export default function PlayerManager({ tournamentId }: { tournamentId: string }
   // Save edit changes
   const handleSaveEdit = async () => {
     if (!editingPlayerId || !editForm.name.trim()) return;
+
+    const mobileTrimmed = editForm.mobile.trim();
+    if (!mobileTrimmed) {
+      alert("Mobile number is required as a unique player ID.");
+      return;
+    }
+
+    // Uniqueness validation
+    const isMobileDuplicate = players.some(p => p.id !== editingPlayerId && p.mobile && p.mobile.trim() === mobileTrimmed);
+    if (isMobileDuplicate) {
+      alert("This mobile number is already registered for another player. Mobile numbers must be unique.");
+      return;
+    }
+
     try {
       const playerRef = doc(db, `tournaments/${tournamentId}/players`, editingPlayerId);
       const updatedData = {
         name: editForm.name.trim(),
-        age: editForm.age ? Number(editForm.age) : ''
+        age: editForm.age ? Number(editForm.age) : '',
+        mobile: mobileTrimmed
       };
       
       // Update main player doc
       await updateDoc(playerRef, updatedData);
+
+      // Sync edit to global master players registry (keyed by mobile)
+      const globalPlayerRef = doc(db, 'players', mobileTrimmed);
+      let globalL2 = "";
+      if (editForm.chapterId) {
+        const chapter = allRootsLevel2.find(c => c.id === editForm.chapterId);
+        if (chapter) {
+          globalL2 = chapter.name;
+        }
+      }
+
+      await setDoc(globalPlayerRef, {
+        name: updatedData.name,
+        age: updatedData.age,
+        mobile: updatedData.mobile,
+        ...(globalL2 ? { l2: globalL2 } : {}),
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
 
       const prevAssignment = allRootsPlayers.find(ap => ap.id === editingPlayerId);
       const prevChapterId = prevAssignment ? prevAssignment.level2Id : '';
@@ -264,6 +443,7 @@ export default function PlayerManager({ tournamentId }: { tournamentId: string }
             await setDoc(newRosterRef, {
               name: updatedData.name,
               age: updatedData.age,
+              mobile: updatedData.mobile,
               assignedAt: new Date().toISOString()
             });
           }
@@ -275,7 +455,8 @@ export default function PlayerManager({ tournamentId }: { tournamentId: string }
           const rosterRef = doc(db, `tournaments/${tournamentId}/roots/${chapter.rootId}/level1/${chapter.level1Id}/level2/${chapter.id}/players`, editingPlayerId);
           await updateDoc(rosterRef, {
             name: updatedData.name,
-            age: updatedData.age
+            age: updatedData.age,
+            mobile: updatedData.mobile
           });
         }
       }
@@ -320,6 +501,7 @@ export default function PlayerManager({ tournamentId }: { tournamentId: string }
     setEditForm({
       name: p.name,
       age: String(p.age || ''),
+      mobile: String(p.mobile || ''),
       chapterId: activeAssignment ? activeAssignment.level2Id : '',
       groupId: playerGroup ? playerGroup.id : ''
     });
@@ -330,6 +512,7 @@ export default function PlayerManager({ tournamentId }: { tournamentId: string }
     const q = searchQuery.toLowerCase();
     const assignedGroup = groups.find(g => g.playerIds?.includes(p.id));
     return p.name.toLowerCase().includes(q) || 
+           (p.mobile && p.mobile.toLowerCase().includes(q)) ||
            (assignedGroup && assignedGroup.name.toLowerCase().includes(q));
   });
 
@@ -342,94 +525,873 @@ export default function PlayerManager({ tournamentId }: { tournamentId: string }
     return (a.name || '').localeCompare(b.name || '');
   });
 
+  // Fuzzy match pasted category name to database level 2 chapters
+  const matchChapter = (pastedL2: string) => {
+    if (!pastedL2) return "";
+    const cleaned = pastedL2.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!cleaned) return "";
+    
+    // Try exact match on cleaned combined string: rootName + level1Name + name
+    for (const c of sortedChapters) {
+      const combined = `${c.rootName || ''} ${c.level1Name || ''} ${c.name || ''}`.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (combined === cleaned) return c.id;
+    }
+    
+    // Try exact match of c.name (Chapter name itself)
+    for (const c of sortedChapters) {
+      const cleanName = (c.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (cleanName === cleaned) return c.id;
+    }
+
+    // Try substring match on cleaned combined string
+    for (const c of sortedChapters) {
+      const combined = `${c.rootName || ''} ${c.level1Name || ''} ${c.name || ''}`.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (combined.includes(cleaned) || cleaned.includes(combined)) return c.id;
+    }
+
+    // Try segment/contains matching
+    for (const c of sortedChapters) {
+      const cleanL2Name = (c.name || '').toLowerCase();
+      const cleanL1Name = (c.level1Name || '').toLowerCase();
+      const cleanRootName = (c.rootName || '').toLowerCase();
+      const pastedLower = pastedL2.toLowerCase();
+      if (
+        pastedLower.includes(cleanL2Name) && 
+        (pastedLower.includes(cleanL1Name) || cleanL1Name === 'solo' || cleanL1Name === 'doubles')
+      ) {
+        return c.id;
+      }
+    }
+
+    return "";
+  };
+
+  // Fuzzy match pasted group/team name to database groups
+  const matchGroup = (pastedGrp: string) => {
+    if (!pastedGrp) return "";
+    const cleaned = pastedGrp.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!cleaned) return "";
+
+    for (const g of groups) {
+      const cleanName = (g.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (cleanName === cleaned) return g.id;
+    }
+
+    for (const g of groups) {
+      const cleanName = (g.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (cleanName.includes(cleaned) || cleaned.includes(cleanName)) return g.id;
+    }
+
+    return "";
+  };
+
+  // Parse Excel text (Tab-separated) or CSV (Comma-separated)
+  const parseBulkData = () => {
+    if (!bulkText.trim()) {
+      alert("Please paste some Excel data or upload a file first.");
+      return;
+    }
+
+    const lines = bulkText.split(/\r?\n/);
+    const result: any[] = [];
+    let isFirstLineHeader = false;
+
+    // Check if first line contains common keywords suggesting header row
+    if (lines.length > 0) {
+      const firstLine = lines[0].toLowerCase();
+      if (
+        firstLine.includes('name') || 
+        firstLine.includes('age') || 
+        firstLine.includes('phone') || 
+        firstLine.includes('mobile') || 
+        firstLine.includes('group') || 
+        firstLine.includes('team')
+      ) {
+        isFirstLineHeader = true;
+      }
+    }
+
+    const seenMobilesInPasted = new Set<string>();
+    const startIndex = isFirstLineHeader ? 1 : 0;
+
+    for (let i = startIndex; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      // Excel uses Tabs. Standard CSV uses Comma or Semicolon
+      let cols = line.split('\t');
+      if (cols.length <= 1) {
+        cols = line.split(',');
+      }
+      if (cols.length <= 1) {
+        cols = line.split(';');
+      }
+
+      // Strip surrounding quotes
+      const cleanCols = cols.map(c => {
+        let val = c.trim();
+        if (val.startsWith('"') && val.endsWith('"')) {
+          val = val.substring(1, val.length - 1).trim();
+        }
+        return val;
+      });
+
+      if (cleanCols.length === 0 || cleanCols.every(c => !c)) continue;
+
+      let name = "";
+      let age = "";
+      let mobile = "";
+      let originalGroup = "";
+
+      if (isFirstLineHeader) {
+        const headers = lines[0].toLowerCase().split(/\t|,|;/).map(h => h.trim().replace(/"/g, ''));
+        const nameIdx = headers.findIndex(h => h.includes('name') || h.includes('player'));
+        const ageIdx = headers.findIndex(h => h.includes('age'));
+        const mobileIdx = headers.findIndex(h => h.includes('phone') || h.includes('mobile') || h.includes('number') || h.includes('tel'));
+        
+        // Identify Group (Team) Index
+        let grpIdx = headers.findIndex(h => h.includes('group') || h.includes('team') || h.includes('club'));
+
+        name = nameIdx !== -1 ? cleanCols[nameIdx] || "" : cleanCols[0] || "";
+        age = ageIdx !== -1 ? cleanCols[ageIdx] || "" : cleanCols[1] || "";
+        mobile = mobileIdx !== -1 ? cleanCols[mobileIdx] || "" : cleanCols[2] || "";
+        originalGroup = grpIdx !== -1 ? cleanCols[grpIdx] || "" : "";
+      } else {
+        // Fallback positional values: Name (0), Age (1), Mobile (2), Group (3)
+        name = cleanCols[0] || "";
+        age = cleanCols[1] || "";
+        mobile = cleanCols[2] || "";
+        originalGroup = cleanCols[3] || "";
+      }
+
+      const mobileCleaned = mobile.replace(/[^0-9+]/g, '').trim();
+
+      // Check master global registry for automatic lookup & auto-fill!
+      let isAutoFilledFromGlobal = false;
+      let matchedGlobalL2Name = "";
+      if (mobileCleaned) {
+        const matchedMaster = masterRegistry.find(mr => mr.mobile === mobileCleaned || mr.id === mobileCleaned);
+        if (matchedMaster) {
+          if (!name.trim() && matchedMaster.name) {
+            name = matchedMaster.name;
+            isAutoFilledFromGlobal = true;
+          }
+          if (!age.trim() && matchedMaster.age !== undefined && matchedMaster.age !== null) {
+            age = String(matchedMaster.age);
+            isAutoFilledFromGlobal = true;
+          }
+          if (matchedMaster.l2) {
+            matchedGlobalL2Name = matchedMaster.l2;
+          }
+        }
+      }
+
+      // Row-level validation
+      let isValid = true;
+      let errorMsg = "";
+
+      if (!name.trim()) {
+        isValid = false;
+        errorMsg = "Name is required.";
+      } else if (!mobileCleaned) {
+        isValid = false;
+        errorMsg = "Mobile number is required.";
+      } else if (seenMobilesInPasted.has(mobileCleaned)) {
+        isValid = false;
+        errorMsg = "Duplicate phone number in pasted list.";
+      } else {
+        const isDbDuplicate = players.some(p => p.mobile && p.mobile.trim() === mobileCleaned);
+        if (isDbDuplicate) {
+          isValid = false;
+          errorMsg = "Phone number already exists in database.";
+        }
+      }
+
+      if (mobileCleaned) {
+        seenMobilesInPasted.add(mobileCleaned);
+      }
+
+      // Auto-fuzzy match group
+      const matchedGroupId = matchGroup(originalGroup);
+
+      // Auto-fuzzy match chapter from global registry
+      let matchedChapterId = "";
+      let matchedChapterName = "";
+      if (matchedGlobalL2Name) {
+        const chapter = allRootsLevel2.find(c => c.name.toLowerCase() === matchedGlobalL2Name.toLowerCase());
+        if (chapter) {
+          matchedChapterId = chapter.id;
+          matchedChapterName = chapter.name;
+        }
+      }
+
+      result.push({
+        tempId: `parsed-${i}-${Date.now()}`,
+        name: name.trim(),
+        age: age ? String(Number(age) || '') : '',
+        mobile: mobileCleaned,
+        originalGroup: originalGroup,
+        groupId: matchedGroupId,
+        chapterId: matchedChapterId,
+        matchedChapterName: matchedChapterName,
+        isAutoFilledFromGlobal,
+        isValid,
+        errorMsg
+      });
+    }
+
+    if (result.length === 0) {
+      alert("Could not extract any rows from pasted text. Please verify formatting.");
+      return;
+    }
+
+    setParsedPlayers(result);
+  };
+
+  // Drag and drop spreadsheet/CSV files handlers
+  const handleFileDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      readAndSetFile(file);
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      readAndSetFile(file);
+    }
+  };
+
+  const readAndSetFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      if (event.target?.result) {
+        setBulkText(event.target.result as string);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  // Save bulk parsed players directly to Firestore
+  const handleImportSubmit = async () => {
+    const validPlayers = parsedPlayers.filter(p => p.isValid);
+    if (validPlayers.length === 0) {
+      alert("No valid player profiles to import. Please check validation status.");
+      return;
+    }
+
+    setIsImporting(true);
+    setImportProgress(0);
+
+    let successCount = 0;
+    const total = validPlayers.length;
+    const tempGroups = [...groups];
+
+    for (let idx = 0; idx < total; idx++) {
+      const pData = validPlayers[idx];
+      try {
+        const playersCol = collection(db, `tournaments/${tournamentId}/players`);
+        const newPlayerRef = doc(playersCol);
+        const newId = newPlayerRef.id;
+
+        const playerProfile = {
+          name: pData.name,
+          age: pData.age ? Number(pData.age) : '',
+          mobile: pData.mobile,
+          createdAt: new Date().toISOString()
+        };
+
+        // Create player profile
+        await setDoc(newPlayerRef, playerProfile);
+
+        // Sync to global master players registry (keyed by mobile)
+        const globalPlayerRef = doc(db, 'players', playerProfile.mobile);
+        await setDoc(globalPlayerRef, {
+          name: playerProfile.name,
+          age: playerProfile.age,
+          mobile: playerProfile.mobile,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+
+        // Nested Chapter L2 Assignment
+        if (pData.chapterId) {
+          const chapter = allRootsLevel2.find(c => c.id === pData.chapterId);
+          if (chapter) {
+            const rosterRef = doc(db, `tournaments/${tournamentId}/roots/${chapter.rootId}/level1/${chapter.level1Id}/level2/${chapter.id}/players`, newId);
+            await setDoc(rosterRef, {
+              name: playerProfile.name,
+              age: playerProfile.age,
+              mobile: playerProfile.mobile,
+              assignedAt: new Date().toISOString()
+            });
+          }
+        }
+
+        // Group/Team Assignment
+        let finalGroupId = pData.groupId;
+        if (!finalGroupId && pData.originalGroup) {
+          const groupNameTrimmed = pData.originalGroup.trim();
+          let matchedGroup = tempGroups.find(g => (g.name || '').trim().toLowerCase() === groupNameTrimmed.toLowerCase());
+          if (matchedGroup) {
+            finalGroupId = matchedGroup.id;
+          } else {
+            // Auto-create new group in Firestore!
+            const groupsCol = collection(db, `tournaments/${tournamentId}/groups`);
+            const newGroupRef = doc(groupsCol);
+            await setDoc(newGroupRef, {
+              name: groupNameTrimmed,
+              playerIds: []
+            });
+            const newGroupObj = { id: newGroupRef.id, name: groupNameTrimmed, playerIds: [] };
+            tempGroups.push(newGroupObj);
+            finalGroupId = newGroupRef.id;
+          }
+        }
+
+        // Fallback to general dropdown selection if no row-level group matches
+        if (!finalGroupId && selectedGroupId) {
+          finalGroupId = selectedGroupId;
+        }
+
+        if (finalGroupId) {
+          const targetGroup = tempGroups.find(g => g.id === finalGroupId);
+          if (targetGroup) {
+            const updatedPlayerIds = [...(targetGroup.playerIds || []), newId];
+            await updateDoc(doc(db, `tournaments/${tournamentId}/groups`, targetGroup.id), {
+              playerIds: updatedPlayerIds
+            });
+            // Reflect locally for next loop if same group is updated
+            targetGroup.playerIds = updatedPlayerIds;
+          }
+        }
+
+        successCount++;
+      } catch (err) {
+        console.error(`Failed to import player profile ${pData.name}:`, err);
+      }
+      setImportProgress(Math.round(((idx + 1) / total) * 100));
+    }
+
+    setIsImporting(false);
+    alert(`Bulk import completed! Successfully registered ${successCount} of ${total} player profiles.`);
+    setParsedPlayers([]);
+    setBulkText('');
+    setImportMode('single');
+  };
+
   return (
     <div className="space-y-6 p-6 bg-white rounded-2xl shadow-sm border border-slate-100 font-sans">
-      <div>
-        <h2 className="text-2xl font-black text-slate-800 tracking-tight flex items-center gap-2">
-          <User className="text-indigo-600 w-7 h-7" /> Manage Tournament Players
-        </h2>
-        <p className="text-slate-500 text-sm font-medium mt-0.5">Add, edit, delete, and directly assign players to Chapters (Level 2 rosters).</p>
-      </div>
-
-      {/* Adding Section */}
-      <div className="p-5 bg-slate-50/70 border border-slate-100 rounded-2xl space-y-4">
-        <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
-          <Sparkles className="w-4 h-4 text-indigo-500" /> Add New Player Profile
-        </h3>
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-100 pb-4">
+        <div>
+          <h2 className="text-2xl font-black text-slate-800 tracking-tight flex items-center gap-2">
+            <User className="text-indigo-600 w-7 h-7" /> Manage Tournament Players
+          </h2>
+          <p className="text-slate-500 text-sm font-medium mt-0.5">Add, edit, delete, and directly assign players to Chapters (Level 2 rosters).</p>
+        </div>
         
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
-          {/* Name input */}
-          <div className="space-y-1">
-            <label className="text-xs font-bold text-slate-500">Player Name</label>
-            <input 
-              value={player.name} 
-              onChange={(e) => setPlayer({...player, name: e.target.value})} 
-              className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition" 
-              placeholder="e.g. John Doe" 
-            />
-          </div>
-
-          {/* Age input */}
-          <div className="space-y-1">
-            <label className="text-xs font-bold text-slate-500">Age</label>
-            <input 
-              value={player.age} 
-              onChange={(e) => setPlayer({...player, age: e.target.value})} 
-              className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition" 
-              placeholder="e.g. 24" 
-              type="number" 
-            />
-          </div>
-
-          {/* Chapter Assignment Dropdown */}
-          <div className="space-y-1">
-            <label className="text-xs font-bold text-slate-500 flex items-center gap-1">
-              <Layers className="w-3.5 h-3.5 text-indigo-500" /> Assign Chapter (L2)
-            </label>
-            <select 
-              value={selectedChapterId} 
-              onChange={(e) => setSelectedChapterId(e.target.value)}
-              className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition cursor-pointer"
-            >
-              <option value="">-- Choose Chapter --</option>
-              {sortedChapters.map(c => (
-                <option key={c.id} value={c.id}>
-                  {c.rootName} &gt; {c.level1Name} &gt; {c.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Group Assignment Dropdown */}
-          <div className="space-y-1">
-            <label className="text-xs font-bold text-slate-500 flex items-center gap-1">
-              <Users className="w-3.5 h-3.5 text-indigo-500" /> Group Assignment
-            </label>
-            <select 
-              value={selectedGroupId} 
-              onChange={(e) => setSelectedGroupId(e.target.value)}
-              className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition cursor-pointer"
-            >
-              <option value="">-- Choose Group --</option>
-              {groups.map(g => (
-                <option key={g.id} value={g.id}>
-                  {g.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Add Profile Button */}
-          <div>
-            <button 
-              onClick={handleAdd} 
-              className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl transition text-sm shadow-sm hover:shadow flex items-center justify-center gap-1.5 h-[42px]"
-            >
-              <Plus className="w-4 h-4" /> Add Profile
-            </button>
-          </div>
+        {/* Toggle between Single and Bulk Excel Imports */}
+        <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200/60 self-stretch sm:self-auto">
+          <button
+            onClick={() => { setImportMode('single'); setParsedPlayers([]); }}
+            className={`flex-1 sm:flex-none px-4 py-2 text-xs font-black uppercase tracking-wider rounded-lg transition-all ${
+              importMode === 'single'
+                ? 'bg-white text-indigo-700 shadow-sm'
+                : 'text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            Single Profile
+          </button>
+          <button
+            onClick={() => setImportMode('bulk')}
+            className={`flex-1 sm:flex-none px-4 py-2 text-xs font-black uppercase tracking-wider rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+              importMode === 'bulk'
+                ? 'bg-white text-indigo-700 shadow-sm'
+                : 'text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" /> Bulk Excel Import
+          </button>
         </div>
       </div>
+
+      {/* -------------------- SINGLE PLAYER FORM -------------------- */}
+      {importMode === 'single' && (
+        <div className="p-5 bg-slate-50/70 border border-slate-100 rounded-2xl space-y-4">
+          <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
+            <Sparkles className="w-4 h-4 text-indigo-500" /> Add New Player Profile
+          </h3>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 items-end">
+            {/* Name input */}
+            <div className="space-y-1">
+              <label className="text-xs font-bold text-slate-500">Player Name</label>
+              <input 
+                value={player.name} 
+                onChange={(e) => setPlayer({...player, name: e.target.value})} 
+                className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition" 
+                placeholder="e.g. John Doe" 
+              />
+            </div>
+
+            {/* Mobile input with Master Registry lookup integration */}
+            <div className="space-y-1">
+              <label className="text-xs font-bold text-slate-500 flex items-center justify-between gap-1">
+                <span className="flex items-center gap-1">
+                  <Phone className="w-3.5 h-3.5 text-indigo-500" /> Mobile (Unique ID)
+                </span>
+              </label>
+              <div className="relative">
+                <input 
+                  value={player.mobile} 
+                  onChange={(e) => setPlayer({...player, mobile: e.target.value})} 
+                  className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition pr-8" 
+                  placeholder="e.g. 9876543210" 
+                  type="tel"
+                />
+                {isSearchingMobile && (
+                  <div className="absolute right-3 top-3">
+                    <RefreshCw className="w-4 h-4 text-slate-400 animate-spin" />
+                  </div>
+                )}
+              </div>
+              <div className="min-h-[18px] flex flex-wrap gap-1 mt-1">
+                {isSearchingMobile && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-500 animate-pulse">
+                    🔍 Looking up master registry...
+                  </span>
+                )}
+                {!isSearchingMobile && matchedMasterProfile && (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-100 text-[10px] font-extrabold animate-fade-in">
+                    👤 Profile Found: {matchedMasterProfile.name} ({matchedMasterProfile.age || 'No Age'})
+                  </span>
+                )}
+                {!isSearchingMobile && player.mobile.trim().replace(/[^0-9+]/g, '').length >= 5 && !matchedMasterProfile && (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-100 text-[10px] font-extrabold animate-fade-in">
+                    🆕 New profile (will register globally)
+                  </span>
+                )}
+                {!isSearchingMobile && player.mobile.trim().replace(/[^0-9+]/g, '').length >= 5 && players.some(p => p.mobile && p.mobile.trim().replace(/[^0-9+]/g, '') === player.mobile.trim().replace(/[^0-9+]/g, '')) && (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-100 text-[10px] font-extrabold animate-fade-in w-full">
+                    ⚠️ Already in this tournament
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Age input */}
+            <div className="space-y-1">
+              <label className="text-xs font-bold text-slate-500">Age</label>
+              <input 
+                value={player.age} 
+                onChange={(e) => setPlayer({...player, age: e.target.value})} 
+                className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition" 
+                placeholder="e.g. 24" 
+                type="number" 
+              />
+            </div>
+
+            {/* Chapter Assignment Dropdown */}
+            <div className="space-y-1">
+              <label className="text-xs font-bold text-slate-500 flex items-center gap-1">
+                <Layers className="w-3.5 h-3.5 text-indigo-500" /> Assign Chapter (L2)
+              </label>
+              <select 
+                value={selectedChapterId} 
+                onChange={(e) => setSelectedChapterId(e.target.value)}
+                className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition cursor-pointer"
+              >
+                <option value="">-- Choose Chapter --</option>
+                {sortedChapters.map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.rootName} &gt; {c.level1Name} &gt; {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Group Assignment Dropdown */}
+            <div className="space-y-1">
+              <label className="text-xs font-bold text-slate-500 flex items-center gap-1">
+                <Users className="w-3.5 h-3.5 text-indigo-500" /> Group Assignment
+              </label>
+              <select 
+                value={selectedGroupId} 
+                onChange={(e) => setSelectedGroupId(e.target.value)}
+                className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition cursor-pointer"
+              >
+                <option value="">-- Choose Group --</option>
+                {groups.map(g => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Add Profile Button */}
+            <div>
+              <button 
+                onClick={handleAdd} 
+                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl transition text-sm shadow-sm hover:shadow flex items-center justify-center gap-1.5 h-[42px]"
+              >
+                <Plus className="w-4 h-4" /> Add Profile
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* -------------------- BULK IMPORT WORKBENCH -------------------- */}
+      {importMode === 'bulk' && (
+        <div className="space-y-5">
+          {parsedPlayers.length === 0 ? (
+            /* Paste area / Dropzone */
+            <div className="space-y-4">
+              <div className="p-4.5 bg-indigo-50/50 border border-indigo-100 rounded-2xl text-slate-700 text-xs leading-relaxed space-y-2">
+                <h4 className="font-bold text-indigo-950 flex items-center gap-1.5 text-sm">
+                  <FileSpreadsheet className="w-4 h-4 text-emerald-600" /> Excel Spreadsheet Copy-Paste Importer
+                </h4>
+                <p>
+                  1. Open your Excel, Google Sheet, or CSV document.
+                </p>
+                <p>
+                  2. Ensure your columns are aligned. The importer is smart and supports a header row (e.g., <strong>Name, Age, Phone No, Group/Team Name</strong>) or positional matching if no headers are provided.
+                </p>
+                <p>
+                  3. Select your cells, copy them (<kbd className="bg-slate-200 px-1 py-0.5 rounded text-[10px]">Ctrl+C</kbd> / <kbd className="bg-slate-200 px-1 py-0.5 rounded text-[10px]">Cmd+C</kbd>), and paste the rows in the workspace box below!
+                </p>
+              </div>
+
+              {/* Paste Textbox / Drag & Dropzone */}
+              <div 
+                onDragOver={e => e.preventDefault()}
+                onDrop={handleFileDrop}
+                className="relative group border-2 border-dashed border-slate-200 hover:border-indigo-500 rounded-2xl p-5 bg-slate-50/40 transition-all text-center space-y-4"
+              >
+                <div className="flex flex-col items-center justify-center space-y-1.5 pointer-events-none">
+                  <Upload className="w-8 h-8 text-slate-400 group-hover:text-indigo-500 transition-colors" />
+                  <p className="font-bold text-slate-700 text-xs">Paste Excel spreadsheet columns, or drop a CSV / TXT file here</p>
+                  <p className="text-slate-400 text-[10px]">Tab-separated spreadsheet rows or comma-separated values</p>
+                </div>
+
+                <textarea
+                  value={bulkText}
+                  onChange={e => setBulkText(e.target.value)}
+                  className="w-full h-44 bg-white border border-slate-200 focus:border-indigo-500 rounded-xl p-3 text-xs font-mono outline-none shadow-inner resize-none focus:ring-2 focus:ring-indigo-500/10 transition"
+                  placeholder="Paste spreadsheet contents here..."
+                />
+
+                <div className="flex justify-between items-center pt-2">
+                  <div className="flex items-center gap-2 text-xs">
+                    <label className="text-slate-500 font-bold">Assign Group to All (Optional):</label>
+                    <select
+                      value={selectedGroupId}
+                      onChange={e => setSelectedGroupId(e.target.value)}
+                      className="border border-slate-200 bg-white p-1.5 rounded-lg text-xs font-medium cursor-pointer"
+                    >
+                      <option value="">-- No Group Assignment --</option>
+                      {groups.map(g => (
+                        <option key={g.id} value={g.id}>{g.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    {/* Native File Selector fallback */}
+                    <label className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-black rounded-xl transition cursor-pointer flex items-center gap-1.5 border border-slate-200">
+                      <FileText className="w-3.5 h-3.5" /> Upload File
+                      <input 
+                        type="file" 
+                        accept=".csv,.txt" 
+                        onChange={handleFileSelect} 
+                        className="hidden" 
+                      />
+                    </label>
+
+                    <button
+                      onClick={parseBulkData}
+                      disabled={!bulkText.trim()}
+                      className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white font-black text-xs rounded-xl transition shadow-sm hover:shadow"
+                    >
+                      Analyze & Parse Data
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            /* Preview spreadsheet parser workbench */
+            <div className="space-y-4">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-slate-50 border border-slate-200/60 p-4 rounded-2xl">
+                <div>
+                  <h4 className="font-extrabold text-slate-800 text-sm tracking-tight">Review Parsed Spreadsheet Records</h4>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Double-check parsed rows below, fix any validation errors, and hit import!
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setParsedPlayers([])}
+                    className="px-3 py-1.5 bg-white border border-slate-200 text-slate-600 text-xs font-bold rounded-lg hover:bg-slate-50 transition"
+                  >
+                    Reset & Paste Again
+                  </button>
+                </div>
+              </div>
+
+              {/* Validation stats */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl text-center">
+                  <span className="block text-[10px] font-bold text-slate-400 uppercase">Total Rows</span>
+                  <span className="text-lg font-black text-slate-800">{parsedPlayers.length}</span>
+                </div>
+                <div className="p-3 bg-emerald-50/40 border border-emerald-100 rounded-xl text-center">
+                  <span className="block text-[10px] font-bold text-emerald-600/75 uppercase">Valid Profiles</span>
+                  <span className="text-lg font-black text-emerald-700">{parsedPlayers.filter(p => p.isValid).length}</span>
+                </div>
+                <div className="p-3 bg-rose-50/40 border border-rose-100 rounded-xl text-center">
+                  <span className="block text-[10px] font-bold text-rose-600/75 uppercase">Errors Detected</span>
+                  <span className="text-lg font-black text-rose-700">{parsedPlayers.filter(p => !p.isValid).length}</span>
+                </div>
+                <div className="p-3 bg-indigo-50/40 border border-indigo-100 rounded-xl text-center">
+                  <span className="block text-[10px] font-bold text-indigo-600/75 uppercase">Target Group</span>
+                  <span className="text-xs font-extrabold text-indigo-950 truncate max-w-full block mt-1">
+                    {groups.find(g => g.id === selectedGroupId)?.name || 'None'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Progress Overlay during save */}
+              {isImporting && (
+                <div className="p-4 bg-indigo-50 border border-indigo-100 rounded-2xl space-y-2">
+                  <div className="flex justify-between items-center text-xs font-black text-indigo-950">
+                    <span className="flex items-center gap-1.5">
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Batch Creating Real Profiles in Cloud Run DB...
+                    </span>
+                    <span>{importProgress}%</span>
+                  </div>
+                  <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
+                    <div className="bg-indigo-600 h-full transition-all duration-300" style={{ width: `${importProgress}%` }} />
+                  </div>
+                </div>
+              )}
+
+               {/* Interactive preview table */}
+              <div className="overflow-x-auto border border-slate-150 rounded-2xl bg-white shadow-xs max-h-[380px]">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-100 uppercase tracking-wider text-[10px]">
+                      <th className="p-3 pl-4">Status</th>
+                      <th className="p-3">Player Name</th>
+                      <th className="p-3 w-20">Age</th>
+                      <th className="p-3">Phone (Unique ID)</th>
+                      <th className="p-3">Group (Team) Assignment</th>
+                      <th className="p-3 text-center pr-4">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 font-medium">
+                    {parsedPlayers.map((p, idx) => {
+                      // Inline Row validator re-trigger
+                      const updateFieldAndValidate = (field: string, val: string) => {
+                        const updated = [...parsedPlayers];
+                        updated[idx][field] = val;
+                        
+                        // Recalculate row status
+                        const cleanMobile = updated[idx].mobile.replace(/[^0-9+]/g, '').trim();
+                        updated[idx].mobile = cleanMobile;
+
+                        let isValid = true;
+                        let errorMsg = "";
+                        let matchedChapterId = updated[idx].chapterId || "";
+                        let matchedChapterName = updated[idx].matchedChapterName || "";
+
+                        if (!updated[idx].name.trim()) {
+                          isValid = false;
+                          errorMsg = "Name is required.";
+                        } else if (!cleanMobile) {
+                          isValid = false;
+                          errorMsg = "Mobile number is required.";
+                        } else {
+                          const isPastedDup = updated.some((item, i) => i !== idx && item.mobile === cleanMobile);
+                          if (isPastedDup) {
+                            isValid = false;
+                            errorMsg = "Duplicate phone number in pasted list.";
+                          } else {
+                            const isDbDup = players.some(dp => dp.mobile && dp.mobile.trim() === cleanMobile);
+                            if (isDbDup) {
+                              isValid = false;
+                              errorMsg = "Phone number already exists in database.";
+                            }
+                          }
+                        }
+
+                        // Re-evaluate matched L2 chapter from masterRegistry if phone changed
+                        if (cleanMobile) {
+                          const matchedMaster = masterRegistry.find(mr => mr.mobile === cleanMobile || mr.id === cleanMobile);
+                          if (matchedMaster) {
+                            if (!updated[idx].name.trim() && matchedMaster.name) {
+                              updated[idx].name = matchedMaster.name;
+                              updated[idx].isAutoFilledFromGlobal = true;
+                            }
+                            if (matchedMaster.l2) {
+                              const chapter = allRootsLevel2.find(c => c.name.toLowerCase() === matchedMaster.l2.toLowerCase());
+                              if (chapter) {
+                                matchedChapterId = chapter.id;
+                                matchedChapterName = chapter.name;
+                              }
+                            }
+                          }
+                        }
+
+                        updated[idx].chapterId = matchedChapterId;
+                        updated[idx].matchedChapterName = matchedChapterName;
+                        updated[idx].isValid = isValid;
+                        updated[idx].errorMsg = errorMsg;
+                        setParsedPlayers(updated);
+                      };
+
+                      return (
+                        <tr 
+                          key={p.tempId} 
+                          className={`group ${p.isValid ? "hover:bg-slate-50/40" : "bg-rose-50/30 hover:bg-rose-50/50"}`}
+                        >
+                          {/* Row Status Indicator */}
+                          <td className="p-3 pl-4">
+                            {p.isValid ? (
+                              <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded text-[10px] font-bold border border-emerald-100">
+                                <Check className="w-3 h-3 text-emerald-600" /> Ready
+                              </span>
+                            ) : (
+                              <span 
+                                className="inline-flex items-center gap-1 text-rose-700 bg-rose-50 px-2 py-0.5 rounded text-[10px] font-bold border border-rose-100 cursor-help"
+                                title={p.errorMsg}
+                              >
+                                <AlertTriangle className="w-3 h-3 text-rose-500" /> Error
+                              </span>
+                            )}
+                          </td>
+
+                          {/* Name Input */}
+                          <td className="p-2">
+                            <input
+                              value={p.name}
+                              onChange={e => updateFieldAndValidate('name', e.target.value)}
+                              className="border border-slate-200 bg-white p-1.5 rounded-lg text-xs font-semibold focus:border-indigo-500 outline-none w-full max-w-[150px]"
+                              placeholder="Name"
+                            />
+                            {p.isAutoFilledFromGlobal && (
+                              <div className="text-[9px] text-emerald-600 font-extrabold mt-0.5 flex items-center gap-0.5 animate-pulse">
+                                👤 From Global Profile
+                              </div>
+                            )}
+                            {p.matchedChapterName && (
+                              <div className="text-[9px] text-indigo-600 font-black mt-0.5 flex items-center gap-0.5">
+                                🏫 Auto L2: "{p.matchedChapterName}"
+                              </div>
+                            )}
+                          </td>
+
+                          {/* Age Input */}
+                          <td className="p-2">
+                            <input
+                              value={p.age}
+                              onChange={e => updateFieldAndValidate('age', e.target.value)}
+                              className="border border-slate-200 bg-white p-1.5 rounded-lg text-xs font-semibold focus:border-indigo-500 outline-none w-14 text-center"
+                              placeholder="Age"
+                              type="number"
+                            />
+                          </td>
+
+                          {/* Mobile Input */}
+                          <td className="p-2">
+                            <input
+                              value={p.mobile}
+                              onChange={e => updateFieldAndValidate('mobile', e.target.value)}
+                              className="border border-slate-200 bg-white p-1.5 rounded-lg text-xs font-mono font-semibold focus:border-indigo-500 outline-none w-full max-w-[130px]"
+                              placeholder="e.g. 9876543210"
+                              type="tel"
+                            />
+                            {!p.isValid && p.errorMsg.includes("phone") && (
+                              <div className="text-[10px] text-rose-600 font-extrabold mt-0.5">{p.errorMsg}</div>
+                            )}
+                          </td>
+
+                          {/* Group assignment dropdown */}
+                          <td className="p-2">
+                            <select
+                              value={p.groupId}
+                              onChange={e => {
+                                const updated = [...parsedPlayers];
+                                updated[idx].groupId = e.target.value;
+                                setParsedPlayers(updated);
+                              }}
+                              className="border border-slate-200 bg-white p-1.5 rounded-lg text-xs font-semibold focus:border-indigo-500 outline-none w-full max-w-[180px]"
+                            >
+                              <option value="">-- No Group Assignment --</option>
+                              {groups.map(g => (
+                                <option key={g.id} value={g.id}>{g.name}</option>
+                              ))}
+                            </select>
+                            {p.originalGroup && !p.groupId && (
+                              <div className="text-[9px] text-emerald-600 font-bold mt-0.5 truncate max-w-[180px]">
+                                Will auto-create: "{p.originalGroup}"
+                              </div>
+                            )}
+                            {p.groupId && (
+                              <div className="text-[9px] text-indigo-500 font-bold mt-0.5 truncate max-w-[180px]">
+                                Auto-Matched Group!
+                              </div>
+                            )}
+                          </td>
+
+                          {/* Remove row option */}
+                          <td className="p-3 text-center pr-4">
+                            <button
+                              onClick={() => {
+                                const updated = parsedPlayers.filter((_, i) => i !== idx);
+                                setParsedPlayers(updated);
+                              }}
+                              className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors"
+                              title="Delete row from list"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Action Rows */}
+              <div className="flex justify-between items-center pt-2">
+                <span className="text-xs text-slate-500 font-semibold">
+                  Total valid profiles to import: <strong className="text-indigo-600 font-bold">{parsedPlayers.filter(p => p.isValid).length}</strong> / {parsedPlayers.length}
+                </span>
+
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => { setParsedPlayers([]); setBulkText(''); }}
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-250 text-slate-700 font-extrabold text-xs rounded-xl transition"
+                  >
+                    Clear Preview
+                  </button>
+                  <button
+                    onClick={handleImportSubmit}
+                    disabled={isImporting || parsedPlayers.filter(p => p.isValid).length === 0}
+                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-black text-xs rounded-xl transition shadow-sm hover:shadow flex items-center gap-1.5"
+                  >
+                    <CheckCircle className="w-4 h-4" /> Save & Import Real Profiles
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Main Players List Toolbar */}
       <div className="space-y-4">
@@ -482,13 +1444,23 @@ export default function PlayerManager({ tournamentId }: { tournamentId: string }
                         </button>
                       </div>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <div className="space-y-1">
                           <label className="text-[10px] font-bold text-slate-400 uppercase">Name</label>
                           <input 
                             value={editForm.name}
                             onChange={e => setEditForm({ ...editForm, name: e.target.value })}
                             className="w-full border border-slate-200 p-2 rounded-lg text-xs font-medium outline-none focus:border-indigo-500"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-slate-400 uppercase">Mobile</label>
+                          <input 
+                            value={editForm.mobile}
+                            onChange={e => setEditForm({ ...editForm, mobile: e.target.value })}
+                            className="w-full border border-slate-200 p-2 rounded-lg text-xs font-medium outline-none focus:border-indigo-500"
+                            placeholder="Mobile number"
+                            type="tel"
                           />
                         </div>
                         <div className="space-y-1">
@@ -565,6 +1537,11 @@ export default function PlayerManager({ tournamentId }: { tournamentId: string }
                           <div className="space-y-0.5">
                             <h4 className="font-bold text-slate-800 text-base tracking-tight">{p.name}</h4>
                             <div className="flex flex-wrap items-center gap-2 text-slate-500 text-xs font-medium">
+                              {p.mobile && (
+                                <span className="flex items-center gap-1 px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded text-[10px] font-bold border border-indigo-100/60">
+                                  <Phone className="w-2.5 h-2.5 text-indigo-500" /> {p.mobile}
+                                </span>
+                              )}
                               {p.age && (
                                 <span className="flex items-center gap-1">
                                   <Calendar className="w-3 h-3 text-slate-400" /> {p.age} yrs

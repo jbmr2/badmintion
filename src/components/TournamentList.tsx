@@ -6,11 +6,13 @@ import { Pencil, Trash2, AlertTriangle } from 'lucide-react';
 export default function TournamentList({ 
   onCreateTournament, 
   onSelectTournament,
-  onEditTournament
+  onEditTournament,
+  onViewGlobalPlayers
 }: { 
   onCreateTournament: () => void; 
   onSelectTournament: (id: string) => void;
   onEditTournament: (id: string) => void;
+  onViewGlobalPlayers: () => void;
 }) {
   const [tournaments, setTournaments] = useState<any[]>([]);
   const [tournamentToDelete, setTournamentToDelete] = useState<any | null>(null);
@@ -31,12 +33,20 @@ export default function TournamentList({
           <h2 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight">Active Tournaments</h2>
           <p className="text-xs text-gray-500 font-medium">Select a tournament to manage its details, or use the controls to edit/delete.</p>
         </div>
-        <button 
-          onClick={onCreateTournament}
-          className="w-full sm:w-auto px-4 py-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 text-sm transition shadow-sm cursor-pointer"
-        >
-          Create New Tournament
-        </button>
+        <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+          <button 
+            onClick={onViewGlobalPlayers}
+            className="w-full sm:w-auto px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl font-bold text-sm transition shadow-xs cursor-pointer flex items-center justify-center gap-1.5"
+          >
+            👤 Global Player Profiles
+          </button>
+          <button 
+            onClick={onCreateTournament}
+            className="w-full sm:w-auto px-4 py-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 text-sm transition shadow-sm cursor-pointer"
+          >
+            Create New Tournament
+          </button>
+        </div>
       </div>
       
       {tournaments.length === 0 ? (

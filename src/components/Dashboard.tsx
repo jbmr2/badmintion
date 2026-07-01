@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { db } from '../lib/firebase';
 import { collection, query, onSnapshot } from 'firebase/firestore';
 import { Users, Trophy, ClipboardList, Target, Medal, Activity, Shield } from 'lucide-react';
+import RecentMatches from './RecentMatches';
 
 export default function Dashboard({ tournamentId, onNavigate }: { tournamentId: string, onNavigate: (step: any) => void }) {
   const [stats, setStats] = useState({ players: 0, completedMatches: 0, totalFixtures: 0 });
@@ -68,17 +69,25 @@ export default function Dashboard({ tournamentId, onNavigate }: { tournamentId: 
         </div>
       </div>
       
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
-        {navItems.map(item => (
-            <button 
-                key={item.id} 
-                onClick={() => onNavigate(item.id)} 
-                className="flex flex-col items-center gap-3 p-6 bg-white rounded-2xl shadow-sm border border-slate-100 hover:border-indigo-200 hover:shadow-md transition-all group"
-            >
-                <item.icon className="text-indigo-500 group-hover:scale-110 transition-transform" />
-                <span className="font-semibold text-slate-700">{item.label}</span>
-            </button>
-        ))}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
+        {/* Navigation Grid */}
+        <div className="lg:col-span-2 grid grid-cols-2 sm:grid-cols-3 gap-6">
+          {navItems.map(item => (
+              <button 
+                  key={item.id} 
+                  onClick={() => onNavigate(item.id)} 
+                  className="flex flex-col items-center gap-3 p-6 bg-white rounded-2xl shadow-sm border border-slate-100 hover:border-indigo-200 hover:shadow-md transition-all group"
+              >
+                  <item.icon className="text-indigo-500 group-hover:scale-110 transition-transform" />
+                  <span className="font-semibold text-slate-700">{item.label}</span>
+              </button>
+          ))}
+        </div>
+
+        {/* Recent Matches Sidebar Panel */}
+        <div className="lg:col-span-1">
+          <RecentMatches tournamentId={tournamentId} />
+        </div>
       </div>
     </div>
   );

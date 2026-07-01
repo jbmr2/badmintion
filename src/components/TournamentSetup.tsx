@@ -3,24 +3,22 @@ import { db } from '../lib/firebase';
 import { collection, addDoc, doc, getDoc, updateDoc, getDocs, deleteDoc } from 'firebase/firestore';
 
 const PREDEFINED_CATEGORIES = [
-  "Member - Men's Singles (Open)",
-  "Member - Men's Singles (35+)",
-  "Member - Men's Singles (45+)",
-  "Member - Men's Singles (55+)",
-  "Member - Men's Doubles (Open)",
-  "Member - Men's Doubles (35+)",
-  "Member - Men's Doubles (45+)",
-  "Member - Men's Doubles (55+)",
-  "Member - Women's Singles (Open)",
-  "Member - Women's Singles (35+)",
-  "Member - Women's Doubles (Open)",
-  "Member - Women's Doubles (35+)",
-  "Member - Mixed Doubles (Open)",
-  "Family - Men's Doubles (Open)",
-  "Family - Mixed Doubles (Open)",
-  "Family - Kids' Singles (U12)",
-  "Family - Kids' Singles (U16)",
-  "Family"
+  "Badminton - Solo - Mens Single - Open Category",
+  "Badminton - Solo - Mens Single - 35 Plus",
+  "Badminton - Solo - Mens Single - 45 Plus",
+  "Badminton - Solo - Mens Single - 55 Plus",
+  "Badminton - Solo - Womens Single - Open Category",
+  "Badminton - Solo - Womens Single - 35 Plus",
+  "Badminton - Doubles - Mens Doubles - Open Category",
+  "Badminton - Doubles - Mens Doubles - 35 Plus",
+  "Badminton - Doubles - Mens Doubles - 45 Plus",
+  "Badminton - Doubles - Womens Doubles - Open Category",
+  "Badminton - Doubles - Womens Doubles - 35 Plus",
+  "Badminton - Doubles - Mixed Doubles - Open Category",
+  "Badminton - Family - Mens Doubles - Open Category",
+  "Badminton - Family - Mixed Doubles - Open Category",
+  "Badminton - Kids - Under 12",
+  "Badminton - Kids - Under 16"
 ];
 
 function FormField({ label, required, children }: { label: string, required?: boolean, children: React.ReactNode }) {

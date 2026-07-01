@@ -63,7 +63,30 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
 
     const qGroups = query(collection(db, `tournaments/${tournamentId}/groups`));
     const unsubscribeGroups = onSnapshot(qGroups, (snapshot) => {
-        setGroups(snapshot.docs.map(doc => doc.data()));
+        const fetchedGroups = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
+        const uniqueGroups: any[] = [];
+        const seenNames = new Set<string>();
+        fetchedGroups.forEach(g => {
+          const nameLower = (g.name || '').trim().toLowerCase();
+          if (nameLower && !seenNames.has(nameLower)) {
+            seenNames.add(nameLower);
+            uniqueGroups.push({
+              id: g.id,
+              name: g.name,
+              playerIds: g.playerIds || []
+            });
+          } else if (nameLower) {
+            // Merge playerIds to keep standings accurate
+            const existing = uniqueGroups.find(x => x.name.trim().toLowerCase() === nameLower);
+            if (existing) {
+              existing.playerIds = Array.from(new Set([
+                ...(existing.playerIds || []),
+                ...(g.playerIds || [])
+              ]));
+            }
+          }
+        });
+        setGroups(uniqueGroups);
     });
 
     const qPlayers = query(collection(db, `tournaments/${tournamentId}/players`));

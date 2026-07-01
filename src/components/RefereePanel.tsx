@@ -359,7 +359,8 @@ export default function RefereePanel({ tournamentId }: RefereePanelProps) {
           winner,
           p1Games,
           p2Games,
-          maxPoints: target
+          maxPoints: target,
+          finalizedAt: Date.now()
         });
 
         if (oldWinnerPlayerId !== winnerPlayerId) {
@@ -374,7 +375,8 @@ export default function RefereePanel({ tournamentId }: RefereePanelProps) {
           winner,
           p1Games,
           p2Games,
-          maxPoints: target
+          maxPoints: target,
+          finalizedAt: Date.now()
         });
 
         await adjustTeamPoints(winnerPlayerId, 5, activeFixture);
@@ -383,7 +385,8 @@ export default function RefereePanel({ tournamentId }: RefereePanelProps) {
       // 2. Update fixture
       await updateDoc(doc(db, `tournaments/${tournamentId}/fixtures`, activeFixture.id), {
         status: 'completed',
-        scores: s
+        scores: s,
+        finalizedAt: Date.now()
       });
 
       setActiveFixtureId(null);

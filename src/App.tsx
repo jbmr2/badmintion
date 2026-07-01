@@ -16,8 +16,9 @@ import Dashboard from './components/Dashboard';
 import SystemMonitor from './components/SystemMonitor';
 import OBSTicker from './components/OBSTicker';
 import RefereePanel from './components/RefereePanel';
+import GlobalPlayerRegistry from './components/GlobalPlayerRegistry';
 
-type Step = 'home' | 'setup' | 'details' | 'categories' | 'players' | 'groups' | 'hierarchy' | 'fixtures' | 'scores' | 'points' | 'bracket' | 'champion' | 'monitor' | 'referee';
+type Step = 'home' | 'setup' | 'details' | 'categories' | 'players' | 'groups' | 'hierarchy' | 'fixtures' | 'scores' | 'points' | 'bracket' | 'champion' | 'monitor' | 'referee' | 'global-players';
 
 export default function App() {
   const [step, setStep] = useState<Step>(() => (localStorage.getItem('app-step') as Step) || 'home');
@@ -56,7 +57,7 @@ export default function App() {
   const goBack = () => {
     if (step === 'categories' || step === 'players' || step === 'groups' || step === 'hierarchy' || step === 'fixtures' || step === 'scores' || step === 'points' || step === 'monitor' || step === 'referee') {
       setStep('details');
-    } else if (step === 'details') {
+    } else if (step === 'details' || step === 'global-players') {
       setStep('home');
       setTournamentId(null);
     } else if (step === 'setup') {
@@ -117,7 +118,15 @@ export default function App() {
                       setEditingTournamentId(id);
                       setStep('setup');
                     }}
+                    onViewGlobalPlayers={() => {
+                      setStep('global-players');
+                    }}
                   />
+                </motion.div>
+              )}
+              {step === 'global-players' && (
+                <motion.div key="global-players" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
+                  <GlobalPlayerRegistry />
                 </motion.div>
               )}
               {step === 'setup' && (

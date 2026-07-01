@@ -3,8 +3,22 @@ import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, addDoc, onSnapshot, query, updateDoc, doc, arrayUnion } from 'firebase/firestore';
 
 const PREDEFINED_CATEGORIES = [
-  "Men's Singles", "Women's Singles", "Men's Doubles", "Women's Doubles", 
-  "Mixed Doubles", "U13", "U15", "U17", "U19", "Open", "Family"
+  "Badminton - Solo - Mens Single - Open Category",
+  "Badminton - Solo - Mens Single - 35 Plus",
+  "Badminton - Solo - Mens Single - 45 Plus",
+  "Badminton - Solo - Mens Single - 55 Plus",
+  "Badminton - Solo - Womens Single - Open Category",
+  "Badminton - Solo - Womens Single - 35 Plus",
+  "Badminton - Doubles - Mens Doubles - Open Category",
+  "Badminton - Doubles - Mens Doubles - 35 Plus",
+  "Badminton - Doubles - Mens Doubles - 45 Plus",
+  "Badminton - Doubles - Womens Doubles - Open Category",
+  "Badminton - Doubles - Womens Doubles - 35 Plus",
+  "Badminton - Doubles - Mixed Doubles - Open Category",
+  "Badminton - Family - Mens Doubles - Open Category",
+  "Badminton - Family - Mixed Doubles - Open Category",
+  "Badminton - Kids - Under 12",
+  "Badminton - Kids - Under 16"
 ];
 
 export default function CategoryManager({ tournamentId, onNext }: { tournamentId: string, onNext: () => void }) {

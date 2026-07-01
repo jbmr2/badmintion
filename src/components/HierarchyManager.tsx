@@ -27,12 +27,24 @@ import {
   BookOpen,
   FolderOpen,
   HelpCircle,
-  Copy
+  Copy,
+  Upload
 } from 'lucide-react';
 
 export default function HierarchyManager({ tournamentId }: { tournamentId?: string }) {
-  const [viewMode, setViewMode] = useState<'editor' | 'chain' | 'points'>('chain');
+  const [viewMode, setViewMode] = useState<'editor' | 'chain' | 'points' | 'upload'>('chain');
   const [pointsSubTab, setPointsSubTab] = useState<'roots' | 'parents' | 'chapters'>('chapters');
+  
+  // CSV Import States
+  const [csvInput, setCsvInput] = useState('');
+  const [parsedCsvRows, setParsedCsvRows] = useState<any[]>([]);
+  const [isImportingCsv, setIsImportingCsv] = useState(false);
+  const [importCsvProgress, setImportCsvProgress] = useState('');
+  const [importCsvResult, setImportCsvResult] = useState<{
+    rootsAdded: number;
+    l1Added: number;
+    l2Added: number;
+  } | null>(null);
   const [copySourceTournamentId, setCopySourceTournamentId] = useState<string>('');
   const [showCopyConfirm, setShowCopyConfirm] = useState(false);
   const [isCopying, setIsCopying] = useState(false);
@@ -380,6 +392,227 @@ export default function HierarchyManager({ tournamentId }: { tournamentId?: stri
       setCopyStatusMessage(null);
     } finally {
       setIsCopying(false);
+    }
+  };
+
+  const handleParseCsv = (text: string) => {
+    setCsvInput(text);
+    if (!text.trim()) {
+      setParsedCsvRows([]);
+      return;
+    }
+
+    const lines = text.split(/\r?\n/);
+    const resultRows: any[] = [];
+    
+    // We want to see if the first line is a header
+    let isHeader = false;
+    let rootIdx = 0;
+    let l1Idx = 1;
+    let l2Idx = 2;
+
+    if (lines.length > 0) {
+      const firstLineCols = lines[0].toLowerCase().split(/\t|,|;/).map(c => c.trim().replace(/"/g, ''));
+      const hasRoot = firstLineCols.some(c => c.includes('root') || c.includes('base') || c.includes('level 0') || c.includes('l0'));
+      const hasL2 = firstLineCols.some(c => c.includes('l2') || c.includes('level 2') || c.includes('chapter') || c.includes('category') || c.includes('class'));
+      
+      if (hasRoot || hasL2) {
+        isHeader = true;
+        
+        // Find indexes
+        const foundRootIdx = firstLineCols.findIndex(c => c.includes('root') || c.includes('base') || c.includes('level 0') || c.includes('l0'));
+        if (foundRootIdx !== -1) rootIdx = foundRootIdx;
+        
+        const foundL2Idx = firstLineCols.findIndex(c => c.includes('l2') || c.includes('level 2') || c.includes('chapter') || c.includes('category') || c.includes('class'));
+        if (foundL2Idx !== -1) l2Idx = foundL2Idx;
+        
+        // Level 1 might be in between or named differently
+        const foundL1Idx = firstLineCols.findIndex(c => c.includes('l1') || c.includes('level 1') || c.includes('team') || c.includes('parent'));
+        if (foundL1Idx !== -1) {
+          l1Idx = foundL1Idx;
+        } else {
+          // If 3 columns and we found root and l2, level1 is the other one
+          const otherIdx = [0, 1, 2].find(i => i !== rootIdx && i !== l2Idx);
+          if (otherIdx !== undefined) l1Idx = otherIdx;
+        }
+      }
+    }
+
+    let lastRoot = '';
+    let lastL1 = '';
+
+    const startRow = isHeader ? 1 : 0;
+    for (let i = startRow; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      // split by tab, comma, or semicolon
+      // tab is very common when copying from Google Sheets / Excel
+      let cols: string[] = [];
+      if (line.includes('\t')) {
+        cols = line.split('\t');
+      } else if (line.includes(';')) {
+        cols = line.split(';');
+      } else {
+        cols = line.split(',');
+      }
+
+      cols = cols.map(c => c.trim().replace(/"/g, ''));
+
+      let rName = cols[rootIdx] || '';
+      if (!rName) {
+        rName = lastRoot;
+      } else {
+        if (rName !== lastRoot) {
+          lastL1 = '';
+        }
+        lastRoot = rName;
+      }
+
+      let l1Name = cols[l1Idx] || '';
+      if (!l1Name) {
+        l1Name = lastL1 || 'General';
+      } else {
+        lastL1 = l1Name;
+      }
+
+      const l2Name = cols[l2Idx] || '';
+      const isValid = !!rName && !!l2Name;
+
+      resultRows.push({
+        rowNum: i + 1,
+        rootName: rName,
+        level1Name: l1Name || 'General',
+        level2Name: l2Name,
+        isValid,
+        error: !rName ? 'Missing Root name' : !l2Name ? 'Missing Level 2 Chapter/Category' : ''
+      });
+    }
+
+    setParsedCsvRows(resultRows);
+  };
+
+  const handleImportCsv = async () => {
+    if (!selectedTournamentId) {
+      setErrorText("Please select a tournament first.");
+      return;
+    }
+    const validRows = parsedCsvRows.filter(r => r.isValid);
+    if (validRows.length === 0) {
+      setErrorText("No valid rows to import.");
+      return;
+    }
+
+    setIsImportingCsv(true);
+    setImportCsvProgress("Fetching existing hierarchy structures...");
+    setErrorText(null);
+
+    try {
+      // 1. Fetch all existing Roots under this tournament
+      const rootsCollectionRef = collection(db, `tournaments/${selectedTournamentId}/roots`);
+      const rootsSnap = await getDocs(rootsCollectionRef);
+      const existingRootsMap: { [name: string]: string } = {};
+      rootsSnap.docs.forEach(doc => {
+        existingRootsMap[doc.data().name.trim().toLowerCase()] = doc.id;
+      });
+
+      // 2. We'll cache existing Level 1 and Level 2 structures to avoid duplicates
+      const existingL1Map: { [rootId: string]: { [name: string]: string } } = {};
+      const existingL2Map: { [l1Id: string]: { [name: string]: string } } = {};
+
+      let rootsAdded = 0;
+      let l1Added = 0;
+      let l2Added = 0;
+
+      for (let i = 0; i < validRows.length; i++) {
+        const row = validRows[i];
+        const { rootName, level1Name, level2Name } = row;
+
+        const normalizedRootName = rootName.trim();
+        const rootKey = normalizedRootName.toLowerCase();
+        let rootId = existingRootsMap[rootKey];
+
+        // Ensure Root exists
+        if (!rootId) {
+          setImportCsvProgress(`Creating Root: "${normalizedRootName}"...`);
+          const rootRef = await addDoc(rootsCollectionRef, { name: normalizedRootName });
+          rootId = rootRef.id;
+          existingRootsMap[rootKey] = rootId;
+          rootsAdded++;
+        }
+
+        // Ensure Level 1 cache for this Root is loaded
+        if (!existingL1Map[rootId]) {
+          existingL1Map[rootId] = {};
+          const l1Snap = await getDocs(collection(db, `tournaments/${selectedTournamentId}/roots/${rootId}/level1`));
+          l1Snap.docs.forEach(doc => {
+            existingL1Map[rootId][doc.data().name.trim().toLowerCase()] = doc.id;
+          });
+        }
+
+        const normalizedL1Name = level1Name.trim();
+        const l1Key = normalizedL1Name.toLowerCase();
+        let l1Id = existingL1Map[rootId][l1Key];
+
+        // Ensure Level 1 exists
+        if (!l1Id) {
+          setImportCsvProgress(`Adding Team L1: "${normalizedL1Name}" under "${normalizedRootName}"...`);
+          const l1Ref = await addDoc(collection(db, `tournaments/${selectedTournamentId}/roots/${rootId}/level1`), {
+            name: normalizedL1Name,
+            rootId: rootId
+          });
+          l1Id = l1Ref.id;
+          existingL1Map[rootId][l1Key] = l1Id;
+          l1Added++;
+        }
+
+        // Ensure Level 2 cache for this Level 1 is loaded
+        if (!existingL2Map[l1Id]) {
+          existingL2Map[l1Id] = {};
+          const l2Snap = await getDocs(collection(db, `tournaments/${selectedTournamentId}/roots/${rootId}/level1/${l1Id}/level2`));
+          l2Snap.docs.forEach(doc => {
+            existingL2Map[l1Id][doc.data().name.trim().toLowerCase()] = doc.id;
+          });
+        }
+
+        const normalizedL2Name = level2Name.trim();
+        const l2Key = normalizedL2Name.toLowerCase();
+        let l2Id = existingL2Map[l1Id][l2Key];
+
+        // Ensure Level 2 exists
+        if (!l2Id) {
+          setImportCsvProgress(`Adding Chapter L2: "${normalizedL2Name}" under "${normalizedL1Name}"...`);
+          const l2Ref = await addDoc(collection(db, `tournaments/${selectedTournamentId}/roots/${rootId}/level1/${l1Id}/level2`), {
+            name: normalizedL2Name,
+            level1Id: l1Id
+          });
+          l2Id = l2Ref.id;
+          existingL2Map[l1Id][l2Key] = l2Id;
+          l2Added++;
+        }
+      }
+
+      setImportCsvResult({
+        rootsAdded,
+        l1Added,
+        l2Added
+      });
+      setImportCsvProgress('');
+      setCsvInput('');
+      setParsedCsvRows([]);
+      
+      // Auto switch back to Editor mode after a few seconds
+      setTimeout(() => {
+        setImportCsvResult(null);
+        setViewMode('editor');
+      }, 5000);
+
+    } catch (err: any) {
+      console.error("Error importing CSV hierarchy:", err);
+      setErrorText(`Import failed: ${err.message || String(err)}`);
+      setImportCsvProgress('');
+    } finally {
+      setIsImportingCsv(false);
     }
   };
 
@@ -906,6 +1139,17 @@ export default function HierarchyManager({ tournamentId }: { tournamentId?: stri
           >
             <Trophy className="w-4 h-4" />
             Points Standings
+          </button>
+          <button
+            onClick={() => setViewMode('upload')}
+            className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+              viewMode === 'upload'
+                ? 'bg-indigo-600 text-white shadow-md'
+                : 'text-slate-600 hover:text-slate-800 hover:bg-slate-200/50'
+            }`}
+          >
+            <Upload className="w-4 h-4" />
+            Upload CSV/Spreadsheet
           </button>
         </div>
       </div>
@@ -1499,6 +1743,167 @@ export default function HierarchyManager({ tournamentId }: { tournamentId?: stri
         </div>
       ) : null}
 
+      {/* CSV/Spreadsheet Hierarchy Upload View */}
+      {viewMode === 'upload' && (
+        <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-6">
+          <div className="flex items-center gap-2">
+            <div className="p-2 bg-indigo-50 rounded-xl text-indigo-600">
+              <Upload className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-bold text-slate-800 text-sm uppercase tracking-wider">CSV/Spreadsheet Hierarchy Importer</h3>
+              <p className="text-xs text-slate-500">Bulk import Root Bases, Level 1 Parent Teams, and Level 2 Chapters into this tournament.</p>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div className="bg-slate-50 border border-slate-200/60 rounded-xl p-4 text-xs text-slate-600 leading-relaxed space-y-3">
+              <div className="flex items-center gap-1.5 font-bold text-slate-700">
+                <HelpCircle className="w-4 h-4 text-indigo-500" />
+                How to use the Importer:
+              </div>
+              <ol className="list-decimal pl-5 space-y-1">
+                <li>Copy rows from your Excel, Google Sheets, or a text CSV file.</li>
+                <li>Ensure the columns contain <strong>Root Base</strong>, optional <strong>Level 1 Parent Team</strong>, and <strong>Level 2 Chapter (L2)</strong>.</li>
+                <li>The system will match headers or assign positionally (Column 1: Root, Column 2: Level 1, Column 3: Level 2).</li>
+                <li>Blank Root/Level 1 values are automatically inherited from preceding rows (perfect for grouped layouts!).</li>
+                <li>Duplicate structures will be matched automatically to prevent duplicates.</li>
+              </ol>
+
+              <div className="pt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const sample = `root\tL2\nBiju Joseph\tteam 1\tVelocity\nBiju Joseph\t\tZeal\nBiju Joseph\t\tKinetic`;
+                    handleParseCsv(sample);
+                  }}
+                  className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-lg transition text-[10px]"
+                >
+                  📋 Load Sample Template
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">
+                Paste Spreadsheet Data (Tab/Comma separated)
+              </label>
+              <textarea
+                value={csvInput}
+                onChange={(e) => handleParseCsv(e.target.value)}
+                placeholder={`root\tL2\nBiju Joseph\tteam 1\tVelocity\nBiju Joseph\t\tZeal\nBiju Joseph\t\tKinetic`}
+                rows={7}
+                className="w-full bg-slate-50 border border-slate-200 p-3.5 rounded-2xl text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
+              />
+            </div>
+
+            {parsedCsvRows.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-extrabold uppercase tracking-widest text-slate-400">
+                    Parsed Rows Preview ({parsedCsvRows.length} rows)
+                  </h4>
+                  <div className="flex items-center gap-3 text-xs font-bold">
+                    <span className="text-emerald-600">Valid: {parsedCsvRows.filter(r => r.isValid).length}</span>
+                    {parsedCsvRows.some(r => !r.isValid) && (
+                      <span className="text-rose-600">Invalid: {parsedCsvRows.filter(r => !r.isValid).length}</span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="border border-slate-100 rounded-xl overflow-hidden shadow-sm max-h-[300px] overflow-y-auto">
+                  <table className="w-full border-collapse text-left text-xs text-slate-600">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-100 text-[10px] uppercase tracking-widest text-slate-400 font-extrabold">
+                        <th className="p-3 pl-4 w-12 text-center">Row</th>
+                        <th className="p-3">Root Base</th>
+                        <th className="p-3">Level 1 (Parent Team)</th>
+                        <th className="p-3">Level 2 (Chapter/Category)</th>
+                        <th className="p-3 pr-4">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50">
+                      {parsedCsvRows.map((row, idx) => (
+                        <tr key={idx} className={row.isValid ? "hover:bg-slate-50/50" : "bg-rose-50/30 hover:bg-rose-50/50"}>
+                          <td className="p-3 pl-4 text-center font-bold text-slate-400">{row.rowNum}</td>
+                          <td className="p-3 font-semibold text-slate-700">{row.rootName}</td>
+                          <td className="p-3 font-medium text-slate-600">{row.level1Name}</td>
+                          <td className="p-3 font-black text-slate-800">{row.level2Name}</td>
+                          <td className="p-3 pr-4">
+                            {row.isValid ? (
+                              <span className="inline-flex items-center gap-1 text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full font-bold text-[10px]">
+                                <CheckCircle className="w-3 h-3" /> Ready
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full font-bold text-[10px]" title={row.error}>
+                                ⚠️ Error
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {errorText && (
+                  <div className="p-3 bg-rose-50 border border-rose-100 rounded-xl text-xs text-rose-700 font-medium">
+                    {errorText}
+                  </div>
+                )}
+
+                {importCsvProgress && (
+                  <div className="p-4 bg-indigo-50 border border-indigo-100 rounded-xl flex items-center gap-3 text-xs text-indigo-700 font-bold">
+                    <span className="w-4 h-4 border-2 border-indigo-600/30 border-t-indigo-600 rounded-full animate-spin shrink-0" />
+                    <span>{importCsvProgress}</span>
+                  </div>
+                )}
+
+                {importCsvResult && (
+                  <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-xl space-y-1.5 text-xs text-emerald-800">
+                    <p className="font-extrabold flex items-center gap-1.5">
+                      <CheckCircle className="w-4.5 h-4.5 text-emerald-600" />
+                      Import Completed Successfully!
+                    </p>
+                    <ul className="list-disc pl-5 space-y-0.5 font-semibold">
+                      <li>Roots Created/Mapped: {importCsvResult.rootsAdded}</li>
+                      <li>Parent Teams (Level 1) Created/Mapped: {importCsvResult.l1Added}</li>
+                      <li>Chapters (Level 2) Created/Mapped: {importCsvResult.l2Added}</li>
+                    </ul>
+                  </div>
+                )}
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleImportCsv}
+                    disabled={isImportingCsv || parsedCsvRows.filter(r => r.isValid).length === 0}
+                    className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-extrabold text-xs rounded-xl shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    {isImportingCsv ? (
+                      <>Importing Hierarchy...</>
+                    ) : (
+                      <>🚀 Import {parsedCsvRows.filter(r => r.isValid).length} Valid Hierarchy Structures</>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCsvInput('');
+                      setParsedCsvRows([]);
+                    }}
+                    disabled={isImportingCsv}
+                    className="px-4 py-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 font-bold text-xs rounded-xl transition"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* POINTS STANDINGS DASHBOARD */}
       {viewMode === 'points' && (() => {
         const stats = getHierarchyPointsData();
@@ -1725,7 +2130,7 @@ export default function HierarchyManager({ tournamentId }: { tournamentId?: stri
       })()}
 
       {/* PLAYER ASSIGNMENT DASHBOARD */}
-      {viewMode !== 'points' && (
+      {viewMode !== 'points' && viewMode !== 'upload' && (
         <>
           {selectedLevel2Id ? (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden transition-all duration-300 mt-8">

@@ -28,10 +28,36 @@ export default function GroupManager({ tournamentId, onNext }: { tournamentId: s
         const q = query(collection(db, `tournaments/${tournamentId}/groups`));
         const snapshot = await getDocs(q);
         if (!snapshot.empty) {
-          const fetchedGroups = snapshot.docs.map(doc => doc.data());
-          setGroups(snapshot.docs.map(doc => ({ id: doc.id, name: doc.data().name })));
-          const newAssignments: { [playerId: string]: string } = {};
+          const fetchedGroups = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() as any }));
+          
+          // De-duplicate groups by name and merge playerIds
+          const uniqueFetchedGroups: any[] = [];
+          const seenNames = new Set<string>();
           fetchedGroups.forEach(group => {
+            const nameLower = (group.name || '').trim().toLowerCase();
+            if (!nameLower) return;
+            if (!seenNames.has(nameLower)) {
+              seenNames.add(nameLower);
+              uniqueFetchedGroups.push({
+                id: group.id,
+                name: group.name,
+                playerIds: group.playerIds || []
+              });
+            } else {
+              const existingGroup = uniqueFetchedGroups.find(g => g.name.trim().toLowerCase() === nameLower);
+              if (existingGroup) {
+                existingGroup.playerIds = Array.from(new Set([
+                  ...(existingGroup.playerIds || []),
+                  ...(group.playerIds || [])
+                ]));
+              }
+            }
+          });
+
+          setGroups(uniqueFetchedGroups.map(g => ({ id: g.id, name: g.name })));
+          
+          const newAssignments: { [playerId: string]: string } = {};
+          uniqueFetchedGroups.forEach(group => {
             group.playerIds.forEach((playerId: string) => {
               newAssignments[playerId] = group.name;
             });
