@@ -884,11 +884,12 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
             )}
 
             {/* Bracket columns mapping */}
-            <div className={`grid grid-cols-1 ${preQuarters.length > 0 ? 'md:grid-cols-4' : 'md:grid-cols-3'} gap-6 items-start`}>
+            <div className="overflow-x-auto pb-4 -mx-4 px-4 sm:mx-0 sm:px-0 scrollbar-thin">
+              <div className={`flex md:grid ${preQuarters.length > 0 ? 'md:grid-cols-4' : 'md:grid-cols-3'} gap-6 items-start min-w-[max-content] md:min-w-0 md:max-w-none`}>
               
               {/* STAGE PRE-QUARTER: PRE-QUARTERS */}
               {preQuarters.length > 0 && (
-                <div className="space-y-4">
+                <div className="space-y-4 w-[280px] md:w-auto shrink-0">
                   <div className="bg-slate-900 text-white p-3.5 rounded-2xl flex items-center justify-between shadow-sm">
                     <span className="font-black text-xs uppercase tracking-widest text-indigo-400">Pre-Quarters</span>
                     <span className="text-[10px] bg-indigo-950 px-2 py-0.5 rounded font-bold font-mono">{preQuarters.length} Matches</span>
@@ -949,7 +950,7 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
               )}
 
               {/* STAGE A: QUARTER FINALS */}
-              <div className="space-y-4">
+              <div className="space-y-4 w-[280px] md:w-auto shrink-0">
                 <div className="bg-slate-900 text-white p-3.5 rounded-2xl flex items-center justify-between shadow-sm">
                   <span className="font-black text-xs uppercase tracking-widest text-indigo-400">Quarter Finals</span>
                   <span className="text-[10px] bg-indigo-950 px-2 py-0.5 rounded font-bold font-mono">{quarters.length} Matches</span>
@@ -1015,7 +1016,7 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
               </div>
 
               {/* STAGE B: SEMI FINALS */}
-              <div className="space-y-4">
+              <div className="space-y-4 w-[280px] md:w-auto shrink-0">
                 <div className="bg-slate-900 text-white p-3.5 rounded-2xl flex items-center justify-between shadow-sm">
                   <span className="font-black text-xs uppercase tracking-widest text-emerald-400">Semi Finals</span>
                   <span className="text-[10px] bg-emerald-950 px-2 py-0.5 rounded font-bold font-mono">{semis.length} Matches</span>
@@ -1081,7 +1082,7 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
               </div>
 
               {/* STAGE C: GRAND FINAL */}
-              <div className="space-y-4">
+              <div className="space-y-4 w-[280px] md:w-auto shrink-0">
                 <div className="bg-slate-900 text-white p-3.5 rounded-2xl flex items-center justify-between shadow-sm">
                   <span className="font-black text-xs uppercase tracking-widest text-amber-400">Grand Final</span>
                   <span className="text-[10px] bg-amber-950 px-2 py-0.5 rounded font-bold font-mono">1 Match</span>
@@ -1153,6 +1154,7 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
                 </div>
               </div>
 
+              </div>
             </div>
           </motion.div>
         )}

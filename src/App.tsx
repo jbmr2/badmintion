@@ -3,7 +3,6 @@ import { motion, AnimatePresence } from 'motion/react';
 import { db, auth, signInWithGoogle, signOutUser } from './lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { doc, onSnapshot, setDoc } from 'firebase/firestore';
-import SystemHealthHeader from './components/SystemHealthHeader';
 import TournamentSetup from './components/TournamentSetup';
 import CategoryManager from './components/CategoryManager';
 import PlayerManager from './components/PlayerManager';
@@ -19,8 +18,27 @@ import OBSTicker from './components/OBSTicker';
 import RefereePanel from './components/RefereePanel';
 import GlobalPlayerRegistry from './components/GlobalPlayerRegistry';
 import RoleManager from './components/RoleManager';
+import APIPortal from './components/APIPortal';
+import { 
+  Home, 
+  Calendar, 
+  Trophy, 
+  Medal, 
+  MoreHorizontal, 
+  X, 
+  LogOut, 
+  Code, 
+  Users, 
+  Settings, 
+  Activity, 
+  Shield, 
+  UserCheck, 
+  Menu, 
+  PlusCircle, 
+  Sparkles 
+} from 'lucide-react';
 
-type Step = 'home' | 'setup' | 'details' | 'categories' | 'players' | 'groups' | 'hierarchy' | 'fixtures' | 'scores' | 'points' | 'bracket' | 'champion' | 'monitor' | 'referee' | 'global-players' | 'roles';
+type Step = 'home' | 'setup' | 'details' | 'categories' | 'players' | 'groups' | 'hierarchy' | 'fixtures' | 'scores' | 'points' | 'bracket' | 'champion' | 'monitor' | 'referee' | 'global-players' | 'roles' | 'apis';
 
 export default function App() {
   const [step, setStep] = useState<Step>(() => (localStorage.getItem('app-step') as Step) || 'home');
@@ -29,6 +47,8 @@ export default function App() {
   const [user, setUser] = useState<any>(null);
   const [userRole, setUserRole] = useState<'admin' | 'scorer' | 'user'>('user');
   const [loading, setLoading] = useState(true);
+  const [homeTab, setHomeTab] = useState<'tournaments' | 'hierarchy'>('tournaments');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     localStorage.setItem('app-step', step);
@@ -38,6 +58,13 @@ export default function App() {
       localStorage.removeItem('tournament-id');
     }
   }, [step, tournamentId]);
+
+  // Prevent standard 'user' role from staying on 'monitor' step
+  useEffect(() => {
+    if (step === 'monitor' && userRole === 'user') {
+      setStep(tournamentId ? 'details' : 'home');
+    }
+  }, [step, userRole, tournamentId]);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (authUser) => {
@@ -102,7 +129,7 @@ export default function App() {
   };
 
   const goBack = () => {
-    if (step === 'categories' || step === 'players' || step === 'groups' || step === 'hierarchy' || step === 'fixtures' || step === 'scores' || step === 'points' || step === 'monitor' || step === 'referee' || step === 'roles') {
+    if (step === 'categories' || step === 'players' || step === 'groups' || step === 'hierarchy' || step === 'fixtures' || step === 'scores' || step === 'points' || step === 'monitor' || step === 'referee' || step === 'roles' || step === 'apis') {
       setStep('details');
     } else if (step === 'details' || step === 'global-players') {
       setStep('home');
@@ -127,7 +154,6 @@ export default function App() {
   if (loading) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
   return (
     <div className="min-h-screen bg-gray-50 font-sans flex flex-col">
-      <SystemHealthHeader />
       <div className="p-4 sm:p-6 flex-1">
         <header className="mb-6 sm:mb-8 border-b pb-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
@@ -144,7 +170,7 @@ export default function App() {
           )}
         </header>
 
-        <main className={`${step === 'monitor' || step === 'hierarchy' ? 'max-w-5xl' : 'max-w-4xl'} mx-auto transition-all duration-300`}>
+        <main className={`${step === 'monitor' || step === 'hierarchy' || (step === 'home' && homeTab === 'hierarchy') ? 'max-w-5xl' : 'max-w-4xl'} mx-auto transition-all duration-300`}>
           {!user ? (
             <div className="text-center py-20">
               <h2 className="text-3xl font-bold text-gray-900 mb-4">Welcome to Tournament Manager</h2>
@@ -154,22 +180,50 @@ export default function App() {
           ) : (
             <AnimatePresence mode="wait">
               {step === 'home' && (
-                <motion.div key="home" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-                  <TournamentList 
-                    userRole={userRole}
-                    onCreateTournament={() => {
-                      setEditingTournamentId(null);
-                      setStep('setup');
-                    }} 
-                    onSelectTournament={handleSelectTournament} 
-                    onEditTournament={(id) => {
-                      setEditingTournamentId(id);
-                      setStep('setup');
-                    }}
-                    onViewGlobalPlayers={() => {
-                      setStep('global-players');
-                    }}
-                  />
+                <motion.div key="home" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-6">
+                  {/* Home Screen Segmented Controls */}
+                  <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200/60 max-w-md">
+                    <button
+                      onClick={() => setHomeTab('tournaments')}
+                      className={`flex-1 py-2 px-4 rounded-lg font-bold text-xs transition-all flex items-center justify-center gap-1.5 ${
+                        homeTab === 'tournaments'
+                          ? 'bg-white text-indigo-600 shadow-xs'
+                          : 'text-slate-600 hover:text-slate-800'
+                      }`}
+                    >
+                      🏆 Tournaments
+                    </button>
+                    <button
+                      onClick={() => setHomeTab('hierarchy')}
+                      className={`flex-1 py-2 px-4 rounded-lg font-bold text-xs transition-all flex items-center justify-center gap-1.5 ${
+                        homeTab === 'hierarchy'
+                          ? 'bg-white text-indigo-600 shadow-xs'
+                          : 'text-slate-600 hover:text-slate-800'
+                      }`}
+                    >
+                      🌳 Master Hierarchy
+                    </button>
+                  </div>
+
+                  {homeTab === 'tournaments' ? (
+                    <TournamentList 
+                      userRole={userRole}
+                      onCreateTournament={() => {
+                        setEditingTournamentId(null);
+                        setStep('setup');
+                      }} 
+                      onSelectTournament={handleSelectTournament} 
+                      onEditTournament={(id) => {
+                        setEditingTournamentId(id);
+                        setStep('setup');
+                      }}
+                      onViewGlobalPlayers={() => {
+                        setStep('global-players');
+                      }}
+                    />
+                  ) : (
+                    <HierarchyManager userRole={userRole} />
+                  )}
                 </motion.div>
               )}
               {step === 'global-players' && (
@@ -233,7 +287,7 @@ export default function App() {
                   <PointsTable tournamentId={tournamentId} />
                 </motion.div>
               )}
-              {step === 'monitor' && (
+              {step === 'monitor' && userRole !== 'user' && (
                 <motion.div key="monitor" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="max-w-none">
                   <SystemMonitor tournamentId={tournamentId || undefined} />
                 </motion.div>
@@ -248,10 +302,232 @@ export default function App() {
                   <RoleManager />
                 </motion.div>
               )}
+              {step === 'apis' && (
+                <motion.div key="apis" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
+                  <APIPortal currentTournamentId={tournamentId} onBack={() => setStep('details')} />
+                </motion.div>
+              )}
             </AnimatePresence>
           )}
         </main>
       </div>
+      
+      {/* Mobile Bottom Navigation & Action Menu */}
+      {tournamentId && step !== 'home' && step !== 'setup' && user && (
+        <>
+          {/* Bottom spacing helper */}
+          <div className="h-20 md:hidden" />
+
+          {/* Sticky Bottom Tab Bar */}
+          <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200/80 shadow-[0_-4px_16px_rgba(0,0,0,0.04)] md:hidden h-16 flex items-center justify-around px-2">
+            <button
+              onClick={() => setStep('details')}
+              className={`flex flex-col items-center justify-center flex-1 h-full py-1 text-[10px] font-bold gap-1 transition-all ${
+                step === 'details' ? 'text-indigo-600 font-extrabold' : 'text-slate-400 hover:text-slate-600'
+              }`}
+            >
+              <Home className={`w-5 h-5 ${step === 'details' ? 'scale-110 text-indigo-600' : ''}`} />
+              <span>Dashboard</span>
+            </button>
+
+            <button
+              onClick={() => setStep('fixtures')}
+              className={`flex flex-col items-center justify-center flex-1 h-full py-1 text-[10px] font-bold gap-1 transition-all ${
+                step === 'fixtures' ? 'text-indigo-600 font-extrabold' : 'text-slate-400 hover:text-slate-600'
+              }`}
+            >
+              <Calendar className={`w-5 h-5 ${step === 'fixtures' ? 'scale-110 text-indigo-600' : ''}`} />
+              <span>Fixtures</span>
+            </button>
+
+            <button
+              onClick={() => {
+                if (userRole !== 'user') {
+                  setStep('referee');
+                } else {
+                  setStep('scores');
+                }
+              }}
+              className={`flex flex-col items-center justify-center flex-1 h-full py-1 text-[10px] font-bold gap-1 transition-all ${
+                step === 'scores' || step === 'referee' ? 'text-indigo-600 font-extrabold' : 'text-slate-400 hover:text-slate-600'
+              }`}
+            >
+              <Trophy className={`w-5 h-5 ${step === 'scores' || step === 'referee' ? 'scale-110 text-indigo-600' : ''}`} />
+              <span>{userRole !== 'user' ? 'Referee' : 'Scores'}</span>
+            </button>
+
+            <button
+              onClick={() => setStep('points')}
+              className={`flex flex-col items-center justify-center flex-1 h-full py-1 text-[10px] font-bold gap-1 transition-all ${
+                step === 'points' ? 'text-indigo-600 font-extrabold' : 'text-slate-400 hover:text-slate-600'
+              }`}
+            >
+              <Medal className={`w-5 h-5 ${step === 'points' ? 'scale-110 text-indigo-600' : ''}`} />
+              <span>Standings</span>
+            </button>
+
+            <button
+              onClick={() => setMobileMenuOpen(true)}
+              className="flex flex-col items-center justify-center flex-1 h-full py-1 text-[10px] font-bold gap-1 text-slate-400 hover:text-slate-600"
+            >
+              <MoreHorizontal className="w-5 h-5" />
+              <span>More</span>
+            </button>
+          </nav>
+
+          {/* Slide-Up Bottom Sheet Modal */}
+          <AnimatePresence>
+            {mobileMenuOpen && (
+              <>
+                {/* Backdrop overlay */}
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 md:hidden"
+                />
+
+                {/* Bottom Sheet Panel */}
+                <motion.div
+                  initial={{ y: '100%' }}
+                  animate={{ y: 0 }}
+                  exit={{ y: '100%' }}
+                  transition={{ type: 'spring', damping: 25, stiffness: 250 }}
+                  className="fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-3xl shadow-2xl border-t border-slate-100 max-h-[85vh] overflow-y-auto md:hidden pb-10"
+                >
+                  {/* Pull Handle Indicator */}
+                  <div className="w-12 h-1.5 bg-slate-200 rounded-full mx-auto my-3" />
+
+                  {/* Header */}
+                  <div className="px-6 pb-4 flex justify-between items-center border-b border-slate-100">
+                    <div>
+                      <h3 className="font-extrabold text-slate-800 text-lg">Tournament Menu</h3>
+                      <p className="text-[11px] text-slate-400 uppercase tracking-wider font-semibold">Tournament ID: {tournamentId}</p>
+                    </div>
+                    <button
+                      onClick={() => setMobileMenuOpen(false)}
+                      className="p-1.5 bg-slate-50 hover:bg-slate-100 rounded-full text-slate-400 hover:text-slate-600 transition-colors"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  {/* Options List */}
+                  <div className="p-4 grid grid-cols-2 gap-3">
+                    <button
+                      onClick={() => {
+                        setStep('players');
+                        setMobileMenuOpen(false);
+                      }}
+                      className={`flex flex-col items-center gap-2 p-4 rounded-2xl border text-center transition-all ${
+                        step === 'players' ? 'bg-indigo-50 border-indigo-200 text-indigo-700 font-extrabold' : 'bg-slate-50/60 border-slate-100 text-slate-700 font-bold hover:bg-slate-50'
+                      }`}
+                    >
+                      <Users className="w-5 h-5 text-indigo-500" />
+                      <span className="text-xs">Manage Players</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setStep('groups');
+                        setMobileMenuOpen(false);
+                      }}
+                      className={`flex flex-col items-center gap-2 p-4 rounded-2xl border text-center transition-all ${
+                        step === 'groups' ? 'bg-indigo-50 border-indigo-200 text-indigo-700 font-extrabold' : 'bg-slate-50/60 border-slate-100 text-slate-700 font-bold hover:bg-slate-50'
+                      }`}
+                    >
+                      <Settings className="w-5 h-5 text-indigo-500" />
+                      <span className="text-xs">Manage Groups</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setStep('categories');
+                        setMobileMenuOpen(false);
+                      }}
+                      className={`flex flex-col items-center gap-2 p-4 rounded-2xl border text-center transition-all ${
+                        step === 'categories' ? 'bg-indigo-50 border-indigo-200 text-indigo-700 font-extrabold' : 'bg-slate-50/60 border-slate-100 text-slate-700 font-bold hover:bg-slate-50'
+                      }`}
+                    >
+                      <Settings className="w-5 h-5 text-indigo-500" />
+                      <span className="text-xs">Categories</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setStep('hierarchy');
+                        setMobileMenuOpen(false);
+                      }}
+                      className={`flex flex-col items-center gap-2 p-4 rounded-2xl border text-center transition-all ${
+                        step === 'hierarchy' ? 'bg-indigo-50 border-indigo-200 text-indigo-700 font-extrabold' : 'bg-slate-50/60 border-slate-100 text-slate-700 font-bold hover:bg-slate-50'
+                      }`}
+                    >
+                      <Settings className="w-5 h-5 text-indigo-500" />
+                      <span className="text-xs">Master Hierarchy</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setStep('apis');
+                        setMobileMenuOpen(false);
+                      }}
+                      className={`flex flex-col items-center gap-2 p-4 rounded-2xl border text-center transition-all ${
+                        step === 'apis' ? 'bg-indigo-50 border-indigo-200 text-indigo-700 font-extrabold' : 'bg-slate-50/60 border-slate-100 text-slate-700 font-bold hover:bg-slate-50'
+                      }`}
+                    >
+                      <Code className="w-5 h-5 text-indigo-500" />
+                      <span className="text-xs">API Links</span>
+                    </button>
+
+                    {userRole === 'admin' && (
+                      <button
+                        onClick={() => {
+                          setStep('roles');
+                          setMobileMenuOpen(false);
+                        }}
+                        className={`flex flex-col items-center gap-2 p-4 rounded-2xl border text-center transition-all ${
+                          step === 'roles' ? 'bg-indigo-50 border-indigo-200 text-indigo-700 font-extrabold' : 'bg-slate-50/60 border-slate-100 text-slate-700 font-bold hover:bg-slate-50'
+                        }`}
+                      >
+                        <UserCheck className="w-5 h-5 text-indigo-500" />
+                        <span className="text-xs">User Roles</span>
+                      </button>
+                    )}
+
+                    {userRole !== 'user' && (
+                      <button
+                        onClick={() => {
+                          setStep('monitor');
+                          setMobileMenuOpen(false);
+                        }}
+                        className={`flex flex-col items-center gap-2 p-4 rounded-2xl border text-center transition-all ${
+                          step === 'monitor' ? 'bg-indigo-50 border-indigo-200 text-indigo-700 font-extrabold' : 'bg-slate-50/60 border-slate-100 text-slate-700 font-bold hover:bg-slate-50'
+                        }`}
+                      >
+                        <Activity className="w-5 h-5 text-indigo-500" />
+                        <span className="text-xs">System Monitor</span>
+                      </button>
+                    )}
+
+                    <button
+                      onClick={() => {
+                        setStep('home');
+                        setTournamentId(null);
+                        setMobileMenuOpen(false);
+                      }}
+                      className="flex flex-col items-center gap-2 p-4 rounded-2xl border border-rose-150 bg-rose-50/50 text-rose-700 font-bold text-center hover:bg-rose-50 col-span-2 mt-2"
+                    >
+                      <LogOut className="w-5 h-5 text-rose-500 animate-pulse" />
+                      <span className="text-xs">Exit Tournament</span>
+                    </button>
+                  </div>
+                </motion.div>
+              </>
+            )}
+          </AnimatePresence>
+        </>
+      )}
     </div>
   );
 }

@@ -48,6 +48,14 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    match /user_roles/{emailId} {
+      allow get: if isSignedIn() && request.auth.token.email == emailId;
+      allow list, write: if isSignedIn() && (
+        request.auth.token.email == 'jbmrsports@gmail.com' ||
+        get(/databases/$(database)/documents/user_roles/$(request.auth.token.email)).data.role == 'admin'
+      );
+    }
+
     // --- Tournament and Subcollections Rules ---
     match /tournaments/{tournamentId} {
       allow read: if true;

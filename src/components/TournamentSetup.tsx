@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../lib/firebase';
-import { collection, addDoc, doc, getDoc, updateDoc, getDocs, deleteDoc } from 'firebase/firestore';
+import { collection, addDoc, doc, getDoc, updateDoc, getDocs, deleteDoc, setDoc } from 'firebase/firestore';
 
 const PREDEFINED_CATEGORIES = [
   "Badminton - Solo - Mens Single - Open Category",
@@ -70,6 +70,36 @@ export default function TournamentSetup({
   ]);
   const [customCourt, setCustomCourt] = useState('');
   const [loading, setLoading] = useState(false);
+  const [customId, setCustomId] = useState('');
+
+  useEffect(() => {
+    if (editingId) return;
+    const generateShortId = async () => {
+      try {
+        const querySnapshot = await getDocs(collection(db, 'tournaments'));
+        const existingIds = querySnapshot.docs.map(doc => doc.id.toUpperCase());
+        
+        let seq = existingIds.length + 1;
+        let generatedId = '';
+        let isUnique = false;
+        
+        while (!isUnique) {
+          const numPart = String(seq).padStart(4, '0');
+          const letterPart = 'A';
+          generatedId = `${numPart}${letterPart}`;
+          if (!existingIds.includes(generatedId)) {
+            isUnique = true;
+          } else {
+            seq++;
+          }
+        }
+        setCustomId(generatedId);
+      } catch (err) {
+        console.error("Error generating short ID:", err);
+      }
+    };
+    generateShortId();
+  }, [editingId]);
 
   useEffect(() => {
     if (!editingId) return;
@@ -179,14 +209,35 @@ export default function TournamentSetup({
 
         onNext(editingId);
       } else {
-        const docRef = await addDoc(collection(db, 'tournaments'), dataToSave);
+        // Ensure a valid short ID exists
+        let finalId = customId.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+        if (!finalId) {
+          // Fallback ID generation
+          const querySnapshot = await getDocs(collection(db, 'tournaments'));
+          const existingIds = querySnapshot.docs.map(doc => doc.id.toUpperCase());
+          let seq = existingIds.length + 1;
+          let isUnique = false;
+          while (!isUnique) {
+            const numPart = String(seq).padStart(4, '0');
+            const letterPart = 'A';
+            finalId = `${numPart}${letterPart}`;
+            if (!existingIds.includes(finalId)) {
+              isUnique = true;
+            } else {
+              seq++;
+            }
+          }
+        }
+
+        const docRef = doc(db, 'tournaments', finalId);
+        await setDoc(docRef, dataToSave);
 
         // Add each selected category to the subcollection for full system compatibility
         for (const name of selectedCategories) {
-          await addDoc(collection(db, `tournaments/${docRef.id}/categories`), { name, tournamentId: docRef.id });
+          await addDoc(collection(db, `tournaments/${finalId}/categories`), { name, tournamentId: finalId });
         }
 
-        onNext(docRef.id);
+        onNext(finalId);
       }
     } catch (error) {
       console.error('Error saving document: ', error);
@@ -226,6 +277,52 @@ export default function TournamentSetup({
       )}
 
       <FormField label="Tournament Name" required><input type="text" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} className="w-full p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none" /></FormField>
+
+      {!editingId && (
+        <FormField label="Tournament ID (Short Code / Custom ID)" required>
+          <div className="flex gap-2">
+            <input 
+              type="text" 
+              value={customId} 
+              onChange={(e) => setCustomId(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))} 
+              maxLength={12}
+              placeholder="e.g. 0001A"
+              className="flex-1 p-2.5 border border-slate-200 rounded-xl font-mono font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-none uppercase bg-slate-50" 
+            />
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  const querySnapshot = await getDocs(collection(db, 'tournaments'));
+                  const existingIds = querySnapshot.docs.map(doc => doc.id.toUpperCase());
+                  let seq = existingIds.length + 1;
+                  let generatedId = '';
+                  let isUnique = false;
+                  while (!isUnique) {
+                    const numPart = String(seq).padStart(4, '0');
+                    const letterPart = 'A';
+                    generatedId = `${numPart}${letterPart}`;
+                    if (!existingIds.includes(generatedId)) {
+                      isUnique = true;
+                    } else {
+                      seq++;
+                    }
+                  }
+                  setCustomId(generatedId);
+                } catch (err) {
+                  console.error(err);
+                }
+              }}
+              className="px-3.5 py-2.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-xl text-xs font-bold transition-colors border border-indigo-200"
+            >
+              Regenerate
+            </button>
+          </div>
+          <span className="text-[10px] text-slate-400 font-medium block mt-1">
+            Short, readable ID used in URLs & stream overlays. Leave as is or type a custom one like "FINALS" or "0001A".
+          </span>
+        </FormField>
+      )}
       <FormField label="Organizer" required><input type="text" value={formData.organizer} onChange={(e) => setFormData({ ...formData, organizer: e.target.value })} className="w-full p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none" /></FormField>
       <FormField label="Venue" required><input type="text" value={formData.venue} onChange={(e) => setFormData({ ...formData, venue: e.target.value })} className="w-full p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none" /></FormField>
       <div className="grid grid-cols-2 gap-4">

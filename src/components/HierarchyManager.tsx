@@ -91,6 +91,15 @@ export default function HierarchyManager({
   const [matches, setMatches] = useState<any[]>([]);
   const [fixtures, setFixtures] = useState<any[]>([]);
 
+  // States for 'All Tournaments' points calculation & aggregate standings
+  const [allTournamentsRoots, setAllTournamentsRoots] = useState<any[]>([]);
+  const [allTournamentsLevel1, setAllTournamentsLevel1] = useState<any[]>([]);
+  const [allTournamentsLevel2, setAllTournamentsLevel2] = useState<any[]>([]);
+  const [allTournamentsAssignedPlayers, setAllTournamentsAssignedPlayers] = useState<any[]>([]);
+  const [allTournamentsTournamentPlayers, setAllTournamentsTournamentPlayers] = useState<any[]>([]);
+  const [allTournamentsMatches, setAllTournamentsMatches] = useState<any[]>([]);
+  const [allTournamentsFixtures, setAllTournamentsFixtures] = useState<any[]>([]);
+
   // Custom states for complete visual bracket/tree representation
   const [allLevel2, setAllLevel2] = useState<{[l1Id: string]: any[]}>({});
   const [allChapterPlayers, setAllChapterPlayers] = useState<{[l2Id: string]: any[]}>({});
@@ -142,6 +151,20 @@ export default function HierarchyManager({
       setTournaments(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
     }, (e) => handleFirestoreError(e, OperationType.LIST, 'tournaments'));
   }, []);
+
+  // Auto select the first tournament if none is currently selected
+  useEffect(() => {
+    if (!selectedTournamentId && tournaments.length > 0) {
+      setSelectedTournamentId(tournaments[0].id);
+    }
+  }, [tournaments, selectedTournamentId]);
+
+  // Auto switch to points standings if 'all' tournaments context is selected
+  useEffect(() => {
+    if (selectedTournamentId === 'all') {
+      setViewMode('points');
+    }
+  }, [selectedTournamentId]);
 
   // 5. Update Selected Tournament from Prop
   useEffect(() => {
@@ -245,7 +268,7 @@ export default function HierarchyManager({
 
   // 7.5 Fetch Fixtures for Points Table
   useEffect(() => {
-    if (selectedTournamentId) {
+    if (selectedTournamentId && selectedTournamentId !== 'all') {
       const q = query(collection(db, `tournaments/${selectedTournamentId}/fixtures`));
       return onSnapshot(q, (snapshot) => {
         setFixtures(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
@@ -254,6 +277,139 @@ export default function HierarchyManager({
       setFixtures([]);
     }
   }, [selectedTournamentId]);
+
+  // 7.6 Listen to ALL Roots across ALL tournaments in 'all' mode
+  useEffect(() => {
+    if (selectedTournamentId !== 'all' || tournaments.length === 0) {
+      setAllTournamentsRoots([]);
+      return;
+    }
+    const unsubscribes = tournaments.map(t => {
+      const q = query(collection(db, `tournaments/${t.id}/roots`));
+      return onSnapshot(q, (snapshot) => {
+        setAllTournamentsRoots(prev => {
+          const filtered = prev.filter(item => item.tournamentId !== t.id);
+          const newItems = snapshot.docs.map(doc => ({ id: doc.id, tournamentId: t.id, ...doc.data() }));
+          return [...filtered, ...newItems];
+        });
+      }, (err) => console.error("Error fetching roots for tournament " + t.id, err));
+    });
+    return () => unsubscribes.forEach(unsub => unsub());
+  }, [tournaments, selectedTournamentId]);
+
+  // 7.7 Listen to ALL Level 1s across ALL roots across ALL tournaments in 'all' mode
+  useEffect(() => {
+    if (selectedTournamentId !== 'all' || allTournamentsRoots.length === 0) {
+      setAllTournamentsLevel1([]);
+      return;
+    }
+    const unsubscribes = allTournamentsRoots.map(root => {
+      const q = query(collection(db, `tournaments/${root.tournamentId}/roots/${root.id}/level1`));
+      return onSnapshot(q, (snapshot) => {
+        setAllTournamentsLevel1(prev => {
+          const filtered = prev.filter(item => !(item.rootId === root.id && item.tournamentId === root.tournamentId));
+          const newItems = snapshot.docs.map(doc => ({ id: doc.id, rootId: root.id, tournamentId: root.tournamentId, ...doc.data() }));
+          return [...filtered, ...newItems];
+        });
+      }, (err) => console.error("Error fetching level1 for root " + root.id, err));
+    });
+    return () => unsubscribes.forEach(unsub => unsub());
+  }, [allTournamentsRoots, selectedTournamentId]);
+
+  // 7.8 Listen to ALL Level 2s across ALL Level 1s in 'all' mode
+  useEffect(() => {
+    if (selectedTournamentId !== 'all' || allTournamentsLevel1.length === 0) {
+      setAllTournamentsLevel2([]);
+      return;
+    }
+    const unsubscribes = allTournamentsLevel1.map(l1 => {
+      const q = query(collection(db, `tournaments/${l1.tournamentId}/roots/${l1.rootId}/level1/${l1.id}/level2`));
+      return onSnapshot(q, (snapshot) => {
+        setAllTournamentsLevel2(prev => {
+          const filtered = prev.filter(item => !(item.level1Id === l1.id && item.tournamentId === l1.tournamentId));
+          const newItems = snapshot.docs.map(doc => ({ id: doc.id, level1Id: l1.id, rootId: l1.rootId, tournamentId: l1.tournamentId, ...doc.data() }));
+          return [...filtered, ...newItems];
+        });
+      }, (err) => console.error("Error fetching level2 for level1 " + l1.id, err));
+    });
+    return () => unsubscribes.forEach(unsub => unsub());
+  }, [allTournamentsLevel1, selectedTournamentId]);
+
+  // 7.9 Listen to ALL Assigned Players across ALL Level 2s in 'all' mode
+  useEffect(() => {
+    if (selectedTournamentId !== 'all' || allTournamentsLevel2.length === 0) {
+      setAllTournamentsAssignedPlayers([]);
+      return;
+    }
+    const unsubscribes = allTournamentsLevel2.map(l2 => {
+      const q = query(collection(db, `tournaments/${l2.tournamentId}/roots/${l2.rootId}/level1/${l2.level1Id}/level2/${l2.id}/players`));
+      return onSnapshot(q, (snapshot) => {
+        setAllTournamentsAssignedPlayers(prev => {
+          const filtered = prev.filter(item => !(item.level2Id === l2.id && item.tournamentId === l2.tournamentId));
+          const newItems = snapshot.docs.map(doc => ({ id: doc.id, level2Id: l2.id, level1Id: l2.level1Id, rootId: l2.rootId, tournamentId: l2.tournamentId, ...doc.data() }));
+          return [...filtered, ...newItems];
+        });
+      }, (err) => console.error("Error fetching players for level2 " + l2.id, err));
+    });
+    return () => unsubscribes.forEach(unsub => unsub());
+  }, [allTournamentsLevel2, selectedTournamentId]);
+
+  // 7.10 Listen to ALL Matches across ALL tournaments in 'all' mode
+  useEffect(() => {
+    if (selectedTournamentId !== 'all' || tournaments.length === 0) {
+      setAllTournamentsMatches([]);
+      return;
+    }
+    const unsubscribes = tournaments.map(t => {
+      const q = query(collection(db, `tournaments/${t.id}/matches`));
+      return onSnapshot(q, (snapshot) => {
+        setAllTournamentsMatches(prev => {
+          const filtered = prev.filter(item => item.tournamentId !== t.id);
+          const newItems = snapshot.docs.map(doc => ({ id: doc.id, tournamentId: t.id, ...doc.data() }));
+          return [...filtered, ...newItems];
+        });
+      }, (err) => console.error("Error fetching matches for tournament " + t.id, err));
+    });
+    return () => unsubscribes.forEach(unsub => unsub());
+  }, [tournaments, selectedTournamentId]);
+
+  // 7.11 Listen to ALL Fixtures across ALL tournaments in 'all' mode
+  useEffect(() => {
+    if (selectedTournamentId !== 'all' || tournaments.length === 0) {
+      setAllTournamentsFixtures([]);
+      return;
+    }
+    const unsubscribes = tournaments.map(t => {
+      const q = query(collection(db, `tournaments/${t.id}/fixtures`));
+      return onSnapshot(q, (snapshot) => {
+        setAllTournamentsFixtures(prev => {
+          const filtered = prev.filter(item => item.tournamentId !== t.id);
+          const newItems = snapshot.docs.map(doc => ({ id: doc.id, tournamentId: t.id, ...doc.data() }));
+          return [...filtered, ...newItems];
+        });
+      }, (err) => console.error("Error fetching fixtures for tournament " + t.id, err));
+    });
+    return () => unsubscribes.forEach(unsub => unsub());
+  }, [tournaments, selectedTournamentId]);
+
+  // 7.12 Listen to ALL Tournament Players across ALL tournaments in 'all' mode
+  useEffect(() => {
+    if (selectedTournamentId !== 'all' || tournaments.length === 0) {
+      setAllTournamentsTournamentPlayers([]);
+      return;
+    }
+    const unsubscribes = tournaments.map(t => {
+      const q = query(collection(db, `tournaments/${t.id}/players`));
+      return onSnapshot(q, (snapshot) => {
+        setAllTournamentsTournamentPlayers(prev => {
+          const filtered = prev.filter(item => item.tournamentId !== t.id);
+          const newItems = snapshot.docs.map(doc => ({ id: doc.id, tournamentId: t.id, ...doc.data() }));
+          return [...filtered, ...newItems];
+        });
+      }, (err) => console.error("Error fetching tournament players for tournament " + t.id, err));
+    });
+    return () => unsubscribes.forEach(unsub => unsub());
+  }, [tournaments, selectedTournamentId]);
 
   // 8. Dynamic full-hierarchy subscription for bracket/tree
   useEffect(() => {
@@ -784,7 +940,15 @@ export default function HierarchyManager({
   };
 
   // Calculate player stats based on matches and tournament players
-  const calculatePlayerStatsMap = () => {
+  const calculatePlayerStatsMap = (
+    tPlayers: any[],
+    assigned: any[],
+    rts: any[],
+    l1s: any[],
+    l2s: any[],
+    mts: any[],
+    fxts: any[]
+  ) => {
     const playerStats: Record<string, {
       wins: number;
       losses: number;
@@ -793,23 +957,21 @@ export default function HierarchyManager({
       pointsScored: number;
       pointsAgainst: number;
       points: number;
+      nonFamilyPoints: number;
     }> = {};
 
     // Initialize
-    tournamentPlayers.forEach(p => {
-      playerStats[p.id] = { wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0, points: 0 };
+    tPlayers.forEach(p => {
+      playerStats[p.id] = { wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0, points: 0, nonFamilyPoints: 0 };
     });
 
     const getWinPoints = (type?: string, playerId?: string, groupName?: string) => {
-      if (groupName?.toLowerCase().includes('family')) {
-        return 0;
-      }
       if (playerId) {
-        const assignment = allRootsPlayers.find(ap => ap.id === playerId);
+        const assignment = assigned.find(ap => ap.id === playerId);
         if (assignment) {
-          const root = roots.find(r => r.id === assignment.rootId);
-          const level1 = allRootsLevel1.find(l1 => l1.id === assignment.level1Id);
-          const level2 = allRootsLevel2.find(l2 => l2.id === assignment.level2Id);
+          const root = rts.find(r => r.id === assignment.rootId);
+          const level1 = l1s.find(l1 => l1.id === assignment.level1Id);
+          const level2 = l2s.find(l2 => l2.id === assignment.level2Id);
 
           if (
             root?.name?.toLowerCase().includes('family') ||
@@ -829,8 +991,8 @@ export default function HierarchyManager({
       return 5;
     };
 
-    matches.forEach(match => {
-      const fixture = fixtures.find(f => f.id === match.fixtureId);
+    mts.forEach(match => {
+      const fixture = fxts.find(f => f.id === match.fixtureId);
       if (!fixture) return;
 
       const p1Id = fixture.player1Id;
@@ -840,17 +1002,22 @@ export default function HierarchyManager({
       const winPointsP2 = getWinPoints(fixture.matchType, p2Id, fixture.groupName);
 
       if (p1Id && !playerStats[p1Id]) {
-        playerStats[p1Id] = { wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0, points: 0 };
+        playerStats[p1Id] = { wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0, points: 0, nonFamilyPoints: 0 };
       }
       if (p2Id && !playerStats[p2Id]) {
-        playerStats[p2Id] = { wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0, points: 0 };
+        playerStats[p2Id] = { wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0, points: 0, nonFamilyPoints: 0 };
       }
+
+      const isFamilyCategory = fixture.groupName?.toLowerCase().includes('family');
 
       // Update P1
       if (p1Id) {
         if (match.winner === 'player1') {
           playerStats[p1Id].wins++;
           playerStats[p1Id].points += winPointsP1;
+          if (!isFamilyCategory) {
+            playerStats[p1Id].nonFamilyPoints += winPointsP1;
+          }
         } else if (match.winner === 'player2') {
           playerStats[p1Id].losses++;
         }
@@ -866,6 +1033,9 @@ export default function HierarchyManager({
         if (match.winner === 'player2') {
           playerStats[p2Id].wins++;
           playerStats[p2Id].points += winPointsP2;
+          if (!isFamilyCategory) {
+            playerStats[p2Id].nonFamilyPoints += winPointsP2;
+          }
         } else if (match.winner === 'player1') {
           playerStats[p2Id].losses++;
         }
@@ -881,7 +1051,24 @@ export default function HierarchyManager({
   };
 
   const getHierarchyPointsData = () => {
-    const playerStatsMap = calculatePlayerStatsMap();
+    const isAllMode = selectedTournamentId === 'all';
+    const activeRoots = isAllMode ? allTournamentsRoots : roots;
+    const activeL1 = isAllMode ? allTournamentsLevel1 : allRootsLevel1;
+    const activeL2 = isAllMode ? allTournamentsLevel2 : allRootsLevel2;
+    const activeAssigned = isAllMode ? allTournamentsAssignedPlayers : allRootsPlayers;
+    const activeTPlayers = isAllMode ? allTournamentsTournamentPlayers : tournamentPlayers;
+    const activeMatches = isAllMode ? allTournamentsMatches : matches;
+    const activeFixtures = isAllMode ? allTournamentsFixtures : fixtures;
+
+    const playerStatsMap = calculatePlayerStatsMap(
+      activeTPlayers,
+      activeAssigned,
+      activeRoots,
+      activeL1,
+      activeL2,
+      activeMatches,
+      activeFixtures
+    );
 
     // 1. Chapters (Level 2) Stats
     const chapterStatsMap: Record<string, {
@@ -899,44 +1086,103 @@ export default function HierarchyManager({
       points: number; // Sum of assigned players' points
     }> = {};
 
-    // Initialize all known Level 2 chapters across all roots
-    allRootsLevel2.forEach(l2 => {
-      const parent = allRootsLevel1.find(l1 => l1.id === l2.level1Id);
-      const root = roots.find(r => r.id === l2.rootId);
-      chapterStatsMap[l2.id] = {
-        id: l2.id,
-        name: l2.name,
-        parentName: parent ? parent.name : 'Unknown',
-        rootName: root ? root.name : 'Unknown',
-        wins: 0,
-        losses: 0,
-        gamesWon: 0,
-        gamesLost: 0,
-        pointsScored: 0,
-        pointsAgainst: 0,
-        playerCount: 0,
-        points: 0
-      };
-    });
+    if (!isAllMode) {
+      // Initialize all known Level 2 chapters across all roots
+      activeL2.forEach(l2 => {
+        const parent = activeL1.find(l1 => l1.id === l2.level1Id);
+        const root = activeRoots.find(r => r.id === l2.rootId);
+        chapterStatsMap[l2.id] = {
+          id: l2.id,
+          name: l2.name,
+          parentName: parent ? parent.name : 'Unknown',
+          rootName: root ? root.name : 'Unknown',
+          wins: 0,
+          losses: 0,
+          gamesWon: 0,
+          gamesLost: 0,
+          pointsScored: 0,
+          pointsAgainst: 0,
+          playerCount: 0,
+          points: 0
+        };
+      });
 
-    // Accumulate player stats into Chapter stats
-    allRootsPlayers.forEach(p => {
-      const chId = p.level2Id;
-      if (chapterStatsMap[chId]) {
-        chapterStatsMap[chId].playerCount++;
-        const pStats = playerStatsMap[p.id];
-        if (pStats) {
-          chapterStatsMap[chId].wins += pStats.wins;
-          chapterStatsMap[chId].losses += pStats.losses;
-          chapterStatsMap[chId].gamesWon += pStats.gamesWon;
-          chapterStatsMap[chId].gamesLost += pStats.gamesLost;
-          chapterStatsMap[chId].pointsScored += pStats.pointsScored;
-          chapterStatsMap[chId].pointsAgainst += pStats.pointsAgainst;
-          // Cumulative sum of players' points:
-          chapterStatsMap[chId].points += pStats.points;
+      // Accumulate player stats into Chapter stats
+      activeAssigned.forEach(p => {
+        const chId = p.level2Id;
+        if (chapterStatsMap[chId]) {
+          chapterStatsMap[chId].playerCount++;
+          const pStats = playerStatsMap[p.id];
+          if (pStats) {
+            chapterStatsMap[chId].wins += pStats.wins;
+            chapterStatsMap[chId].losses += pStats.losses;
+            chapterStatsMap[chId].gamesWon += pStats.gamesWon;
+            chapterStatsMap[chId].gamesLost += pStats.gamesLost;
+            chapterStatsMap[chId].pointsScored += pStats.pointsScored;
+            chapterStatsMap[chId].pointsAgainst += pStats.pointsAgainst;
+            // Cumulative sum of players' points (excluding family categories points which result in zero points in L2):
+            chapterStatsMap[chId].points += pStats.nonFamilyPoints || 0;
+          }
         }
-      }
-    });
+      });
+    } else {
+      // All Tournaments Combined Logic
+      activeL2.forEach(l2 => {
+        const parent = activeL1.find(l1 => l1.id === l2.level1Id && l1.tournamentId === l2.tournamentId);
+        const root = activeRoots.find(r => r.id === l2.rootId && r.tournamentId === l2.tournamentId);
+        
+        const rName = (root ? root.name : 'Unknown').trim();
+        const pName = (parent ? parent.name : 'Unknown').trim();
+        const cName = l2.name.trim();
+        
+        const key = `${rName}::${pName}::${cName}`.toLowerCase();
+        
+        if (!chapterStatsMap[key]) {
+          chapterStatsMap[key] = {
+            id: key,
+            name: cName,
+            parentName: pName,
+            rootName: rName,
+            wins: 0,
+            losses: 0,
+            gamesWon: 0,
+            gamesLost: 0,
+            pointsScored: 0,
+            pointsAgainst: 0,
+            playerCount: 0,
+            points: 0
+          };
+        }
+      });
+
+      // Accumulate player stats into Chapter stats
+      activeAssigned.forEach(p => {
+        const l2 = activeL2.find(item => item.id === p.level2Id && item.tournamentId === p.tournamentId);
+        if (!l2) return;
+        const parent = activeL1.find(l1 => l1.id === l2.level1Id && l1.tournamentId === l2.tournamentId);
+        const root = activeRoots.find(r => r.id === l2.rootId && r.tournamentId === l2.tournamentId);
+
+        const rName = (root ? root.name : 'Unknown').trim();
+        const pName = (parent ? parent.name : 'Unknown').trim();
+        const cName = l2.name.trim();
+        
+        const key = `${rName}::${pName}::${cName}`.toLowerCase();
+        
+        if (chapterStatsMap[key]) {
+          chapterStatsMap[key].playerCount++;
+          const pStats = playerStatsMap[p.id];
+          if (pStats) {
+            chapterStatsMap[key].wins += pStats.wins;
+            chapterStatsMap[key].losses += pStats.losses;
+            chapterStatsMap[key].gamesWon += pStats.gamesWon;
+            chapterStatsMap[key].gamesLost += pStats.gamesLost;
+            chapterStatsMap[key].pointsScored += pStats.pointsScored;
+            chapterStatsMap[key].pointsAgainst += pStats.pointsAgainst;
+            chapterStatsMap[key].points += pStats.nonFamilyPoints || 0;
+          }
+        }
+      });
+    }
 
     // 2. Parent Teams (Level 1) Stats
     const parentStatsMap: Record<string, {
@@ -953,40 +1199,81 @@ export default function HierarchyManager({
       points: number; // Sum of chapters' points
     }> = {};
 
-    // Initialize all known Level 1 Parent Teams
-    allRootsLevel1.forEach(l1 => {
-      const root = roots.find(r => r.id === l1.rootId);
-      parentStatsMap[l1.id] = {
-        id: l1.id,
-        name: l1.name,
-        rootName: root ? root.name : 'Unknown',
-        wins: 0,
-        losses: 0,
-        gamesWon: 0,
-        gamesLost: 0,
-        pointsScored: 0,
-        pointsAgainst: 0,
-        chapterCount: 0,
-        points: 0
-      };
-    });
+    if (!isAllMode) {
+      // Initialize all known Level 1 Parent Teams
+      activeL1.forEach(l1 => {
+        const root = activeRoots.find(r => r.id === l1.rootId);
+        parentStatsMap[l1.id] = {
+          id: l1.id,
+          name: l1.name,
+          rootName: root ? root.name : 'Unknown',
+          wins: 0,
+          losses: 0,
+          gamesWon: 0,
+          gamesLost: 0,
+          pointsScored: 0,
+          pointsAgainst: 0,
+          chapterCount: 0,
+          points: 0
+        };
+      });
 
-    // Accumulate Chapter stats into Parent Team stats
-    Object.values(chapterStatsMap).forEach(ch => {
-      const l2 = allRootsLevel2.find(item => item.id === ch.id);
-      const l1Id = l2 ? l2.level1Id : null;
-      if (l1Id && parentStatsMap[l1Id]) {
-        parentStatsMap[l1Id].chapterCount++;
-        parentStatsMap[l1Id].wins += ch.wins;
-        parentStatsMap[l1Id].losses += ch.losses;
-        parentStatsMap[l1Id].gamesWon += ch.gamesWon;
-        parentStatsMap[l1Id].gamesLost += ch.gamesLost;
-        parentStatsMap[l1Id].pointsScored += ch.pointsScored;
-        parentStatsMap[l1Id].pointsAgainst += ch.pointsAgainst;
-        // Parent points is sum of Chapter points
-        parentStatsMap[l1Id].points += ch.points;
-      }
-    });
+      // Accumulate Chapter stats into Parent Team stats
+      Object.values(chapterStatsMap).forEach(ch => {
+        const l2 = activeL2.find(item => item.id === ch.id);
+        const l1Id = l2 ? l2.level1Id : null;
+        if (l1Id && parentStatsMap[l1Id]) {
+          parentStatsMap[l1Id].chapterCount++;
+          parentStatsMap[l1Id].wins += ch.wins;
+          parentStatsMap[l1Id].losses += ch.losses;
+          parentStatsMap[l1Id].gamesWon += ch.gamesWon;
+          parentStatsMap[l1Id].gamesLost += ch.gamesLost;
+          parentStatsMap[l1Id].pointsScored += ch.pointsScored;
+          parentStatsMap[l1Id].pointsAgainst += ch.pointsAgainst;
+          // Parent points is sum of Chapter points
+          parentStatsMap[l1Id].points += ch.points;
+        }
+      });
+    } else {
+      // All Tournaments Combined Logic
+      activeL1.forEach(l1 => {
+        const root = activeRoots.find(r => r.id === l1.rootId && r.tournamentId === l1.tournamentId);
+        const rName = (root ? root.name : 'Unknown').trim();
+        const pName = l1.name.trim();
+        const key = `${rName}::${pName}`.toLowerCase();
+
+        if (!parentStatsMap[key]) {
+          parentStatsMap[key] = {
+            id: key,
+            name: pName,
+            rootName: rName,
+            wins: 0,
+            losses: 0,
+            gamesWon: 0,
+            gamesLost: 0,
+            pointsScored: 0,
+            pointsAgainst: 0,
+            chapterCount: 0,
+            points: 0
+          };
+        }
+      });
+
+      // Accumulate Chapter stats into Parent Team stats
+      Object.values(chapterStatsMap).forEach(ch => {
+        const key = `${ch.rootName}::${ch.parentName}`.toLowerCase();
+        if (parentStatsMap[key]) {
+          parentStatsMap[key].chapterCount++;
+          parentStatsMap[key].wins += ch.wins;
+          parentStatsMap[key].losses += ch.losses;
+          parentStatsMap[key].gamesWon += ch.gamesWon;
+          parentStatsMap[key].gamesLost += ch.gamesLost;
+          parentStatsMap[key].pointsScored += ch.pointsScored;
+          parentStatsMap[key].pointsAgainst += ch.pointsAgainst;
+          parentStatsMap[key].points += ch.points;
+        }
+      });
+    }
 
     // 3. Roots Stats
     const rootStatsMap: Record<string, {
@@ -1002,38 +1289,76 @@ export default function HierarchyManager({
       points: number; // Sum of parents' points
     }> = {};
 
-    // Initialize all known Roots
-    roots.forEach(r => {
-      rootStatsMap[r.id] = {
-        id: r.id,
-        name: r.name,
-        wins: 0,
-        losses: 0,
-        gamesWon: 0,
-        gamesLost: 0,
-        pointsScored: 0,
-        pointsAgainst: 0,
-        parentCount: 0,
-        points: 0
-      };
-    });
+    if (!isAllMode) {
+      // Initialize all known Roots
+      activeRoots.forEach(r => {
+        rootStatsMap[r.id] = {
+          id: r.id,
+          name: r.name,
+          wins: 0,
+          losses: 0,
+          gamesWon: 0,
+          gamesLost: 0,
+          pointsScored: 0,
+          pointsAgainst: 0,
+          parentCount: 0,
+          points: 0
+        };
+      });
 
-    // Accumulate Parent stats into Root stats
-    Object.values(parentStatsMap).forEach(p => {
-      const l1 = allRootsLevel1.find(item => item.id === p.id);
-      const rId = l1 ? l1.rootId : null;
-      if (rId && rootStatsMap[rId]) {
-        rootStatsMap[rId].parentCount++;
-        rootStatsMap[rId].wins += p.wins;
-        rootStatsMap[rId].losses += p.losses;
-        rootStatsMap[rId].gamesWon += p.gamesWon;
-        rootStatsMap[rId].gamesLost += p.gamesLost;
-        rootStatsMap[rId].pointsScored += p.pointsScored;
-        rootStatsMap[rId].pointsAgainst += p.pointsAgainst;
-        // Root points is sum of Parent points
-        rootStatsMap[rId].points += p.points;
-      }
-    });
+      // Accumulate Parent stats into Root stats
+      Object.values(parentStatsMap).forEach(p => {
+        const l1 = activeL1.find(item => item.id === p.id);
+        const rId = l1 ? l1.rootId : null;
+        if (rId && rootStatsMap[rId]) {
+          rootStatsMap[rId].parentCount++;
+          rootStatsMap[rId].wins += p.wins;
+          rootStatsMap[rId].losses += p.losses;
+          rootStatsMap[rId].gamesWon += p.gamesWon;
+          rootStatsMap[rId].gamesLost += p.gamesLost;
+          rootStatsMap[rId].pointsScored += p.pointsScored;
+          rootStatsMap[rId].pointsAgainst += p.pointsAgainst;
+          // Root points is sum of Parent points
+          rootStatsMap[rId].points += p.points;
+        }
+      });
+    } else {
+      // All Tournaments Combined Logic
+      activeRoots.forEach(r => {
+        const rName = r.name.trim();
+        const key = rName.toLowerCase();
+
+        if (!rootStatsMap[key]) {
+          rootStatsMap[key] = {
+            id: key,
+            name: rName,
+            wins: 0,
+            losses: 0,
+            gamesWon: 0,
+            gamesLost: 0,
+            pointsScored: 0,
+            pointsAgainst: 0,
+            parentCount: 0,
+            points: 0
+          };
+        }
+      });
+
+      // Accumulate Parent stats into Root stats
+      Object.values(parentStatsMap).forEach(p => {
+        const key = p.rootName.toLowerCase();
+        if (rootStatsMap[key]) {
+          rootStatsMap[key].parentCount++;
+          rootStatsMap[key].wins += p.wins;
+          rootStatsMap[key].losses += p.losses;
+          rootStatsMap[key].gamesWon += p.gamesWon;
+          rootStatsMap[key].gamesLost += p.gamesLost;
+          rootStatsMap[key].pointsScored += p.pointsScored;
+          rootStatsMap[key].pointsAgainst += p.pointsAgainst;
+          rootStatsMap[key].points += p.points;
+        }
+      });
+    }
 
     // Show all roots in the standings
     const targetRootsList = Object.values(rootStatsMap);
@@ -1084,7 +1409,7 @@ export default function HierarchyManager({
         <div>
           <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
             <FolderTree className="w-6 h-6 text-indigo-500" />
-            Organizational Hierarchy
+            Master Hierarchy
             {!isAdmin && (
               <span className="px-3 py-1 bg-amber-50 text-amber-700 text-xs font-semibold rounded-full border border-amber-200">
                 👁️ Read-Only
@@ -1092,8 +1417,29 @@ export default function HierarchyManager({
             )}
           </h2>
           <p className="text-sm text-slate-500 mt-1">
-            Build and view your organizational roots, parent teams, chapters, and player rosters.
+            Build and view your master roots, parent teams, chapters, and player rosters.
           </p>
+
+          {/* Tournament context switcher / dropdown */}
+          <div className="mt-4 flex flex-col sm:flex-row sm:items-center gap-2">
+            <span className="text-xs text-slate-400 font-bold uppercase tracking-wider">Tournament Context:</span>
+            <select
+              value={selectedTournamentId || ''}
+              onChange={(e) => {
+                setSelectedTournamentId(e.target.value || undefined);
+                setSelectedRootId(null);
+                setSelectedLevel1Id(null);
+                setSelectedLevel2Id(null);
+              }}
+              className="bg-slate-50 border border-slate-200 text-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer max-w-xs"
+            >
+              <option value="">-- Select Tournament --</option>
+              <option value="all">🌟 All Tournaments (Calculate All Data)</option>
+              {tournaments.map(t => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          </div>
           
           {/* Selected Hierarchy Breadcrumbs */}
           {(selectedRootId || selectedLevel1Id || selectedLevel2Id) && (
@@ -1118,10 +1464,10 @@ export default function HierarchyManager({
         </div>
 
         {/* View Switcher Toggle Buttons */}
-        <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-xl border border-slate-200">
+        <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-xl border border-slate-200 overflow-x-auto max-w-full pb-2 md:pb-1.5 scrollbar-thin">
           <button
             onClick={() => setViewMode('chain')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+            className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shrink-0 whitespace-nowrap ${
               viewMode === 'chain'
                 ? 'bg-indigo-600 text-white shadow-md'
                 : 'text-slate-600 hover:text-slate-800 hover:bg-slate-200/50'
@@ -1133,7 +1479,7 @@ export default function HierarchyManager({
           {isAdmin && (
             <button
               onClick={() => setViewMode('editor')}
-              className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+              className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shrink-0 whitespace-nowrap ${
                 viewMode === 'editor'
                   ? 'bg-indigo-600 text-white shadow-md'
                   : 'text-slate-600 hover:text-slate-800 hover:bg-slate-200/50'
@@ -1145,7 +1491,7 @@ export default function HierarchyManager({
           )}
           <button
             onClick={() => setViewMode('points')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+            className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shrink-0 whitespace-nowrap ${
               viewMode === 'points'
                 ? 'bg-indigo-600 text-white shadow-md'
                 : 'text-slate-600 hover:text-slate-800 hover:bg-slate-200/50'
@@ -1157,7 +1503,7 @@ export default function HierarchyManager({
           {isAdmin && (
             <button
               onClick={() => setViewMode('upload')}
-              className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+              className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shrink-0 whitespace-nowrap ${
                 viewMode === 'upload'
                   ? 'bg-indigo-600 text-white shadow-md'
                   : 'text-slate-600 hover:text-slate-800 hover:bg-slate-200/50'
@@ -1170,7 +1516,57 @@ export default function HierarchyManager({
         </div>
       </div>
 
-      {viewMode === 'chain' ? (
+      {!selectedTournamentId ? (
+        <div className="bg-white p-12 rounded-3xl border border-slate-100 shadow-sm text-center max-w-md mx-auto space-y-4">
+          <div className="mx-auto w-16 h-16 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center border border-indigo-100 shadow-xs">
+            <FolderTree className="w-8 h-8 animate-pulse" />
+          </div>
+          <h3 className="font-extrabold text-lg text-slate-800 tracking-tight">Select Tournament Context</h3>
+          <p className="text-slate-500 text-xs leading-relaxed">
+            Please choose a tournament from the dropdown at the top of the card to explore and manage its master hierarchy, point standings, and chapter rosters.
+          </p>
+          <div className="pt-2">
+            <select
+              value={selectedTournamentId || ''}
+              onChange={(e) => {
+                setSelectedTournamentId(e.target.value || undefined);
+                setSelectedRootId(null);
+                setSelectedLevel1Id(null);
+                setSelectedLevel2Id(null);
+              }}
+              className="w-full bg-indigo-50 border border-indigo-100 text-indigo-900 rounded-xl px-3.5 py-2.5 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer text-center"
+            >
+              <option value="">-- Choose Tournament --</option>
+              <option value="all">🌟 All Tournaments (Calculate All Data)</option>
+              {tournaments.map(t => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      ) : (
+        <>
+          {viewMode === 'chain' ? (
+            selectedTournamentId === 'all' ? (
+              <div className="bg-white p-12 rounded-3xl border border-slate-100 shadow-sm text-center max-w-md mx-auto space-y-4 my-6 flex flex-col items-center justify-center">
+                <div className="mx-auto w-16 h-16 bg-amber-50 text-amber-600 rounded-full flex items-center justify-center border border-amber-100 shadow-xs">
+                  <FolderTree className="w-8 h-8" />
+                </div>
+                <h3 className="font-extrabold text-lg text-slate-800 tracking-tight">Tournament-Specific Feature</h3>
+                <p className="text-slate-500 text-xs leading-relaxed">
+                  Visualizing the hierarchical chain roster is a tournament-specific feature. 
+                  Please choose a single, specific tournament from the <strong>Tournament Context</strong> dropdown at the top to explore and assign rosters.
+                </p>
+                <div className="pt-2">
+                  <button
+                    onClick={() => setViewMode('points')}
+                    className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm shadow-indigo-600/10"
+                  >
+                    Go to Points Standings
+                  </button>
+                </div>
+              </div>
+            ) : (
         <div className="space-y-6">
           
           {/* ROOT SELECTOR CHIPS */}
@@ -1209,7 +1605,7 @@ export default function HierarchyManager({
                 <div>
                   <h4 className="font-extrabold text-sm text-slate-100 flex items-center gap-1.5 uppercase tracking-wider">
                     <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
-                    Connected Organizational Bracket
+                    Connected Master Bracket
                   </h4>
                   <p className="text-[11px] text-slate-400 mt-0.5">Click any node to select/activate and inspect its details</p>
                 </div>
@@ -1386,7 +1782,7 @@ export default function HierarchyManager({
                 <FolderTree className="w-8 h-8" />
               </div>
               <div className="max-w-md space-y-1.5">
-                <h3 className="text-lg font-extrabold text-slate-800">Select an Organizational Root</h3>
+                <h3 className="text-lg font-extrabold text-slate-800">Select a Master Root</h3>
                 <p className="text-sm text-slate-500 leading-relaxed">
                   Click on one of the base roots above to load its complete visual hierarchy bracket, from parent teams to chapter rosters.
                 </p>
@@ -1394,7 +1790,28 @@ export default function HierarchyManager({
             </div>
           )}
         </div>
+            )
       ) : viewMode === 'editor' ? (
+        selectedTournamentId === 'all' ? (
+          <div className="bg-white p-12 rounded-3xl border border-slate-100 shadow-sm text-center max-w-md mx-auto space-y-4 my-6 flex flex-col items-center justify-center">
+            <div className="mx-auto w-16 h-16 bg-amber-50 text-amber-600 rounded-full flex items-center justify-center border border-amber-100 shadow-xs">
+              <FolderOpen className="w-8 h-8" />
+            </div>
+            <h3 className="font-extrabold text-lg text-slate-800 tracking-tight">Tournament-Specific Feature</h3>
+            <p className="text-slate-500 text-xs leading-relaxed">
+              Modifying roots, parent teams, or chapters is a tournament-specific feature. 
+              Please choose a single, specific tournament from the <strong>Tournament Context</strong> dropdown at the top to configure the organization hierarchy.
+            </p>
+            <div className="pt-2">
+              <button
+                onClick={() => setViewMode('points')}
+                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm shadow-indigo-600/10"
+              >
+                Go to Points Standings
+              </button>
+            </div>
+          </div>
+        ) : (
         <div className="space-y-6">
           {/* Copy Setup Panel */}
           <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-4">
@@ -1453,7 +1870,7 @@ export default function HierarchyManager({
             ) : (
               <div className="bg-amber-50 border border-amber-100 p-4 rounded-xl space-y-3">
                 <p className="text-xs text-amber-800 font-medium leading-relaxed">
-                  Are you sure you want to copy the organizational hierarchy? This will save all Roots, Parent Teams (L1), and Chapters (L2) from the selected tournament into the current tournament with the same IDs.
+                  Are you sure you want to copy the master hierarchy? This will save all Roots, Parent Teams (L1), and Chapters (L2) from the selected tournament into the current tournament with the same IDs.
                 </p>
                 <div className="flex items-center gap-3">
                   <button
@@ -1757,10 +2174,31 @@ export default function HierarchyManager({
 
           </div>
         </div>
+            )
       ) : null}
 
       {/* CSV/Spreadsheet Hierarchy Upload View */}
       {viewMode === 'upload' && (
+        selectedTournamentId === 'all' ? (
+          <div className="bg-white p-12 rounded-3xl border border-slate-100 shadow-sm text-center max-w-md mx-auto space-y-4 my-6 flex flex-col items-center justify-center">
+            <div className="mx-auto w-16 h-16 bg-amber-50 text-amber-600 rounded-full flex items-center justify-center border border-amber-100 shadow-xs">
+              <Upload className="w-8 h-8" />
+            </div>
+            <h3 className="font-extrabold text-lg text-slate-800 tracking-tight">Tournament-Specific Feature</h3>
+            <p className="text-slate-500 text-xs leading-relaxed">
+              Uploading a hierarchy dataset via CSV or spreadsheet is a tournament-specific feature. 
+              Please choose a single, specific tournament from the <strong>Tournament Context</strong> dropdown at the top to import its structure.
+            </p>
+            <div className="pt-2">
+              <button
+                onClick={() => setViewMode('points')}
+                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm shadow-indigo-600/10"
+              >
+                Go to Points Standings
+              </button>
+            </div>
+          </div>
+        ) : (
         <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-6">
           <div className="flex items-center gap-2">
             <div className="p-2 bg-indigo-50 rounded-xl text-indigo-600">
@@ -1918,6 +2356,7 @@ export default function HierarchyManager({
             )}
           </div>
         </div>
+            )
       )}
 
       {/* POINTS STANDINGS DASHBOARD */}
@@ -1962,8 +2401,19 @@ export default function HierarchyManager({
             <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-6">
               <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-100 pb-5">
                 <div>
-                  <h3 className="text-lg font-black text-slate-800">Cumulative Multi-Level Standings</h3>
-                  <p className="text-xs text-slate-400 mt-0.5">Real-time point aggregation synchronized down to individual player matches</p>
+                  <h3 className="text-lg font-black text-slate-800 flex items-center gap-2 flex-wrap">
+                    Cumulative Multi-Level Standings
+                    {selectedTournamentId === 'all' && (
+                      <span className="text-[10px] bg-indigo-100 text-indigo-700 px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider">
+                        All Tournaments Combined
+                      </span>
+                    )}
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    {selectedTournamentId === 'all' 
+                      ? 'Aggregating points, wins, and losses dynamically across all tournaments' 
+                      : 'Real-time point aggregation synchronized down to individual player matches'}
+                  </p>
                 </div>
                 <div className="flex gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
                   <button
@@ -2018,7 +2468,7 @@ export default function HierarchyManager({
                       {stats.roots.length === 0 ? (
                         <tr>
                           <td colSpan={7} className="p-8 text-center text-slate-400 font-semibold text-xs">
-                            No roots found. Add organizational roots in the Hierarchy tab.
+                            No roots found. Add master roots in the Hierarchy tab.
                           </td>
                         </tr>
                       ) : (
@@ -2332,6 +2782,8 @@ export default function HierarchyManager({
               </p>
             </div>
           )}
+        </>
+      )}
         </>
       )}
 

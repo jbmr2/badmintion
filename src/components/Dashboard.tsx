@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { db } from '../lib/firebase';
 import { collection, query, onSnapshot } from 'firebase/firestore';
-import { Users, Trophy, ClipboardList, Target, Medal, Activity, Shield, UserCheck } from 'lucide-react';
+import { Users, Trophy, ClipboardList, Target, Medal, Activity, Shield, UserCheck, Code } from 'lucide-react';
 import RecentMatches from './RecentMatches';
 
 export default function Dashboard({ 
@@ -41,13 +41,18 @@ export default function Dashboard({
   const navItems = [
     { label: 'Manage Players', id: 'players', icon: Users },
     { label: 'Manage Groups', id: 'groups', icon: Target },
-    { label: 'Manage Hierarchy', id: 'hierarchy', icon: Users },
+    { label: 'Master Hierarchy', id: 'hierarchy', icon: Users },
     { label: 'Manage Fixtures', id: 'fixtures', icon: ClipboardList },
     { label: 'Enter Scores', id: 'scores', icon: Trophy },
     { label: 'Referee Panel', id: 'referee', icon: Shield },
     { label: 'Points Table', id: 'points', icon: Medal },
-    { label: 'System Monitor', id: 'monitor', icon: Activity },
+    { label: 'API Links', id: 'apis', icon: Code },
   ];
+
+  // System Monitor is hidden for normal 'user' role
+  if (userRole !== 'user') {
+    navItems.push({ label: 'System Monitor', id: 'monitor', icon: Activity });
+  }
 
   // If the user is an admin, show the Roles page in dashboard
   if (userRole === 'admin') {
