@@ -7,12 +7,14 @@ export default function TournamentList({
   onCreateTournament, 
   onSelectTournament,
   onEditTournament,
-  onViewGlobalPlayers
+  onViewGlobalPlayers,
+  userRole = 'user'
 }: { 
   onCreateTournament: () => void; 
   onSelectTournament: (id: string) => void;
   onEditTournament: (id: string) => void;
   onViewGlobalPlayers: () => void;
+  userRole?: 'admin' | 'scorer' | 'user';
 }) {
   const [tournaments, setTournaments] = useState<any[]>([]);
   const [tournamentToDelete, setTournamentToDelete] = useState<any | null>(null);
@@ -25,6 +27,8 @@ export default function TournamentList({
     );
     return () => unsubscribe();
   }, []);
+
+  const isAdmin = userRole === 'admin';
 
   return (
     <div className="space-y-6">
@@ -40,25 +44,34 @@ export default function TournamentList({
           >
             👤 Global Player Profiles
           </button>
-          <button 
-            onClick={onCreateTournament}
-            className="w-full sm:w-auto px-4 py-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 text-sm transition shadow-sm cursor-pointer"
-          >
-            Create New Tournament
-          </button>
+          {isAdmin && (
+            <button 
+              onClick={onCreateTournament}
+              className="w-full sm:w-auto px-4 py-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 text-sm transition shadow-sm cursor-pointer"
+            >
+              Create New Tournament
+            </button>
+          )}
         </div>
       </div>
       
       {tournaments.length === 0 ? (
         <div className="p-12 border-2 border-dashed border-gray-200 rounded-2xl text-center text-gray-400 bg-white">
           <p className="font-bold text-slate-600">No tournaments found</p>
-          <p className="text-xs text-slate-400 mt-1 max-w-xs mx-auto">Get started by creating your first badminton tournament using the setup wizard.</p>
-          <button
-            onClick={onCreateTournament}
-            className="mt-4 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition cursor-pointer"
-          >
-            Create Tournament
-          </button>
+          <p className="text-xs text-slate-400 mt-1 max-w-xs mx-auto">
+            {isAdmin 
+              ? "Get started by creating your first badminton tournament using the setup wizard."
+              : "Contact your tournament administrator to set up a new tournament."
+            }
+          </p>
+          {isAdmin && (
+            <button
+              onClick={onCreateTournament}
+              className="mt-4 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition cursor-pointer"
+            >
+              Create Tournament
+            </button>
+          )}
         </div>
       ) : (
         <div className="grid gap-4">
@@ -82,28 +95,30 @@ export default function TournamentList({
                   </p>
                 )}
               </div>
-              <div className="flex items-center gap-2 mt-2 sm:mt-0 self-end sm:self-center">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onEditTournament(t.id);
-                  }}
-                  className="p-2.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition cursor-pointer border border-slate-100 bg-slate-50/50 hover:scale-105"
-                  title="Edit Tournament Settings"
-                >
-                  <Pencil className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setTournamentToDelete(t);
-                  }}
-                  className="p-2.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition cursor-pointer border border-slate-100 bg-slate-50/50 hover:scale-105"
-                  title="Delete Tournament"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
+              {isAdmin && (
+                <div className="flex items-center gap-2 mt-2 sm:mt-0 self-end sm:self-center">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onEditTournament(t.id);
+                    }}
+                    className="p-2.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition cursor-pointer border border-slate-100 bg-slate-50/50 hover:scale-105"
+                    title="Edit Tournament Settings"
+                  >
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setTournamentToDelete(t);
+                    }}
+                    className="p-2.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition cursor-pointer border border-slate-100 bg-slate-50/50 hover:scale-105"
+                    title="Delete Tournament"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
             </div>
           ))}
         </div>

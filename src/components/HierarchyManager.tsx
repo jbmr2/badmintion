@@ -31,7 +31,14 @@ import {
   Upload
 } from 'lucide-react';
 
-export default function HierarchyManager({ tournamentId }: { tournamentId?: string }) {
+export default function HierarchyManager({ 
+  tournamentId,
+  userRole = 'user'
+}: { 
+  tournamentId?: string;
+  userRole?: 'admin' | 'scorer' | 'user';
+}) {
+  const isAdmin = userRole === 'admin';
   const [viewMode, setViewMode] = useState<'editor' | 'chain' | 'points' | 'upload'>('chain');
   const [pointsSubTab, setPointsSubTab] = useState<'roots' | 'parents' | 'chapters'>('chapters');
   
@@ -1078,6 +1085,11 @@ export default function HierarchyManager({ tournamentId }: { tournamentId?: stri
           <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
             <FolderTree className="w-6 h-6 text-indigo-500" />
             Organizational Hierarchy
+            {!isAdmin && (
+              <span className="px-3 py-1 bg-amber-50 text-amber-700 text-xs font-semibold rounded-full border border-amber-200">
+                👁️ Read-Only
+              </span>
+            )}
           </h2>
           <p className="text-sm text-slate-500 mt-1">
             Build and view your organizational roots, parent teams, chapters, and player rosters.
@@ -1118,17 +1130,19 @@ export default function HierarchyManager({ tournamentId }: { tournamentId?: stri
             <Activity className="w-4 h-4" />
             Chain Explorer
           </button>
-          <button
-            onClick={() => setViewMode('editor')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
-              viewMode === 'editor'
-                ? 'bg-indigo-600 text-white shadow-md'
-                : 'text-slate-600 hover:text-slate-800 hover:bg-slate-200/50'
-            }`}
-          >
-            <FolderOpen className="w-4 h-4" />
-            Data Editor
-          </button>
+          {isAdmin && (
+            <button
+              onClick={() => setViewMode('editor')}
+              className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+                viewMode === 'editor'
+                  ? 'bg-indigo-600 text-white shadow-md'
+                  : 'text-slate-600 hover:text-slate-800 hover:bg-slate-200/50'
+              }`}
+            >
+              <FolderOpen className="w-4 h-4" />
+              Data Editor
+            </button>
+          )}
           <button
             onClick={() => setViewMode('points')}
             className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
@@ -1140,17 +1154,19 @@ export default function HierarchyManager({ tournamentId }: { tournamentId?: stri
             <Trophy className="w-4 h-4" />
             Points Standings
           </button>
-          <button
-            onClick={() => setViewMode('upload')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
-              viewMode === 'upload'
-                ? 'bg-indigo-600 text-white shadow-md'
-                : 'text-slate-600 hover:text-slate-800 hover:bg-slate-200/50'
-            }`}
-          >
-            <Upload className="w-4 h-4" />
-            Upload CSV/Spreadsheet
-          </button>
+          {isAdmin && (
+            <button
+              onClick={() => setViewMode('upload')}
+              className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+                viewMode === 'upload'
+                  ? 'bg-indigo-600 text-white shadow-md'
+                  : 'text-slate-600 hover:text-slate-800 hover:bg-slate-200/50'
+              }`}
+            >
+              <Upload className="w-4 h-4" />
+              Upload CSV/Spreadsheet
+            </button>
+          )}
         </div>
       </div>
 

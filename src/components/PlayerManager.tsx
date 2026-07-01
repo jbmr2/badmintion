@@ -36,7 +36,14 @@ import {
   FileText
 } from 'lucide-react';
 
-export default function PlayerManager({ tournamentId }: { tournamentId: string }) {
+export default function PlayerManager({ 
+  tournamentId,
+  userRole = 'user'
+}: { 
+  tournamentId: string;
+  userRole?: 'admin' | 'scorer' | 'user';
+}) {
+  const isAdmin = userRole === 'admin';
   const [players, setPlayers] = useState<any[]>([]);
   const [player, setPlayer] = useState({ name: '', age: '', mobile: '' });
   const [selectedChapterId, setSelectedChapterId] = useState<string>('');
@@ -887,37 +894,50 @@ export default function PlayerManager({ tournamentId }: { tournamentId: string }
         <div>
           <h2 className="text-2xl font-black text-slate-800 tracking-tight flex items-center gap-2">
             <User className="text-indigo-600 w-7 h-7" /> Manage Tournament Players
+            {!isAdmin && (
+              <span className="px-3 py-1 bg-amber-50 text-amber-700 text-xs font-semibold rounded-full border border-amber-200">
+                👁️ Read-Only
+              </span>
+            )}
           </h2>
           <p className="text-slate-500 text-sm font-medium mt-0.5">Add, edit, delete, and directly assign players to Chapters (Level 2 rosters).</p>
         </div>
         
-        {/* Toggle between Single and Bulk Excel Imports */}
-        <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200/60 self-stretch sm:self-auto">
-          <button
-            onClick={() => { setImportMode('single'); setParsedPlayers([]); }}
-            className={`flex-1 sm:flex-none px-4 py-2 text-xs font-black uppercase tracking-wider rounded-lg transition-all ${
-              importMode === 'single'
-                ? 'bg-white text-indigo-700 shadow-sm'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            Single Profile
-          </button>
-          <button
-            onClick={() => setImportMode('bulk')}
-            className={`flex-1 sm:flex-none px-4 py-2 text-xs font-black uppercase tracking-wider rounded-lg transition-all flex items-center justify-center gap-1.5 ${
-              importMode === 'bulk'
-                ? 'bg-white text-indigo-700 shadow-sm'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" /> Bulk Excel Import
-          </button>
-        </div>
+        {/* Toggle between Single and Bulk Excel Imports - Admin only */}
+        {isAdmin && (
+          <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200/60 self-stretch sm:self-auto">
+            <button
+              onClick={() => { setImportMode('single'); setParsedPlayers([]); }}
+              className={`flex-1 sm:flex-none px-4 py-2 text-xs font-black uppercase tracking-wider rounded-lg transition-all ${
+                importMode === 'single'
+                  ? 'bg-white text-indigo-700 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              Single Profile
+            </button>
+            <button
+              onClick={() => setImportMode('bulk')}
+              className={`flex-1 sm:flex-none px-4 py-2 text-xs font-black uppercase tracking-wider rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                importMode === 'bulk'
+                  ? 'bg-white text-indigo-700 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" /> Bulk Excel Import
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* -------------------- SINGLE PLAYER FORM -------------------- */}
-      {importMode === 'single' && (
+      {!isAdmin && (
+        <div className="p-4 bg-amber-50 border border-amber-200 text-amber-700 rounded-2xl flex items-start gap-2 text-xs font-semibold">
+          ⚠️ Read-Only Mode: Only administrators can add, edit, or delete player registrations.
+        </div>
+      )}
+
+      {/* -------------------- SINGLE PLAYER FORM (Admin only) -------------------- */}
+      {isAdmin && importMode === 'single' && (
         <div className="p-5 bg-slate-50/70 border border-slate-100 rounded-2xl space-y-4">
           <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
             <Sparkles className="w-4 h-4 text-indigo-500" /> Add New Player Profile
@@ -1043,8 +1063,8 @@ export default function PlayerManager({ tournamentId }: { tournamentId: string }
         </div>
       )}
 
-      {/* -------------------- BULK IMPORT WORKBENCH -------------------- */}
-      {importMode === 'bulk' && (
+      {/* -------------------- BULK IMPORT WORKBENCH (Admin only) -------------------- */}
+      {isAdmin && importMode === 'bulk' && (
         <div className="space-y-5">
           {parsedPlayers.length === 0 ? (
             /* Paste area / Dropzone */
@@ -1557,22 +1577,24 @@ export default function PlayerManager({ tournamentId }: { tournamentId: string }
                         </div>
 
                         {/* Top corner actions */}
-                        <div className="flex items-center gap-1.5">
-                          <button 
-                            onClick={() => startEdit(p)}
-                            className="p-1.5 bg-slate-50 hover:bg-indigo-50 text-slate-500 hover:text-indigo-600 rounded-lg transition-colors"
-                            title="Edit player details"
-                          >
-                            <Edit3 className="w-4 h-4" />
-                          </button>
-                          <button 
-                            onClick={() => setPlayerToDelete(p)}
-                            className="p-1.5 bg-slate-50 hover:bg-rose-50 text-slate-500 hover:text-rose-600 rounded-lg transition-colors"
-                            title="Delete Player"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
+                        {isAdmin && (
+                          <div className="flex items-center gap-1.5">
+                            <button 
+                              onClick={() => startEdit(p)}
+                              className="p-1.5 bg-slate-50 hover:bg-indigo-50 text-slate-500 hover:text-indigo-600 rounded-lg transition-colors"
+                              title="Edit player details"
+                            >
+                              <Edit3 className="w-4 h-4" />
+                            </button>
+                            <button 
+                              onClick={() => setPlayerToDelete(p)}
+                              className="p-1.5 bg-slate-50 hover:bg-rose-50 text-slate-500 hover:text-rose-600 rounded-lg transition-colors"
+                              title="Delete Player"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        )}
                       </div>
 
                       {/* Assignment Status Badge Footer */}

@@ -33,7 +33,16 @@ import {
   Award
 } from 'lucide-react';
 
-export default function FixtureManager({ tournamentId, onNext }: { tournamentId: string, onNext: () => void }) {
+export default function FixtureManager({ 
+  tournamentId, 
+  onNext,
+  userRole = 'user'
+}: { 
+  tournamentId: string; 
+  onNext: () => void;
+  userRole?: 'admin' | 'scorer' | 'user';
+}) {
+  const isAdmin = userRole === 'admin';
   const [fixtures, setFixtures] = useState<any[]>([]);
   const [players, setPlayers] = useState<any[]>([]);
   const [manualPlayer1, setManualPlayer1] = useState('');
@@ -298,8 +307,13 @@ export default function FixtureManager({ tournamentId, onNext }: { tournamentId:
             <Sparkles className="w-3.5 h-3.5" />
             Tournament Fixtures
           </div>
-          <h2 className="text-3xl font-black text-white tracking-tight sm:text-4xl">
+          <h2 className="text-3xl font-black text-white tracking-tight sm:text-4xl flex flex-wrap items-center gap-3">
             Match Generator & Planner
+            {!isAdmin && (
+              <span className="px-3 py-1 bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs font-bold rounded-full">
+                👁️ Read-Only Mode
+              </span>
+            )}
           </h2>
           <p className="text-slate-300 text-sm leading-relaxed font-medium">
             Create or auto-generate round-robin league matchups and direct elimination stages. View, search, and manage all scheduled fixtures below.
@@ -325,39 +339,46 @@ export default function FixtureManager({ tournamentId, onNext }: { tournamentId:
         </div>
       </div>
 
-      {/* MATCH CONFIGURATION CONTROL PANEL */}
-      <div className={`p-6 rounded-2xl border transition-all duration-300 ${
-        editingFixture 
-          ? 'bg-indigo-50/50 border-indigo-200 shadow-md shadow-indigo-50' 
-          : 'bg-white border-slate-100 shadow-sm'
-      }`}>
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-100/80 mb-6">
-          <div className="flex items-center gap-3">
-            <div className={`p-2.5 rounded-xl ${editingFixture ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-50 text-slate-600'}`}>
-              <Plus className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="font-bold text-slate-800 text-sm uppercase tracking-wider">
-                {editingFixture ? '✏️ Edit Match Details' : '🏆 Quick Add or Auto-Generate League Matches'}
-              </h3>
-              <p className="text-xs text-slate-500">
-                {editingFixture 
-                  ? `Modify the properties for Match ID #${editingFixture.matchId?.toUpperCase()}.` 
-                  : 'Select players to create a manual match, or choose a Group to instantly seed a full Round-Robin.'
-                }
-              </p>
-            </div>
-          </div>
-          {editingFixture && (
-            <button 
-              onClick={handleCancelEdit} 
-              className="px-3.5 py-1.5 text-xs font-bold text-slate-500 hover:text-slate-800 bg-white border border-slate-200 rounded-lg shadow-xs hover:bg-slate-50 transition flex items-center gap-1 shrink-0"
-            >
-              <X className="w-3.5 h-3.5" />
-              Cancel Edit
-            </button>
-          )}
+      {!isAdmin && (
+        <div className="p-4 bg-amber-50 border border-amber-200 text-amber-700 rounded-2xl flex items-start gap-2 text-xs font-semibold">
+          ⚠️ Read-Only Mode: You must be an administrator to auto-generate, edit, or delete match fixtures.
         </div>
+      )}
+
+      {/* MATCH CONFIGURATION CONTROL PANEL */}
+      {isAdmin && (
+        <div className={`p-6 rounded-2xl border transition-all duration-300 ${
+          editingFixture 
+            ? 'bg-indigo-50/50 border-indigo-200 shadow-md shadow-indigo-50' 
+            : 'bg-white border-slate-100 shadow-sm'
+        }`}>
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-100/80 mb-6">
+            <div className="flex items-center gap-3">
+              <div className={`p-2.5 rounded-xl ${editingFixture ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-50 text-slate-600'}`}>
+                <Plus className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-800 text-sm uppercase tracking-wider">
+                  {editingFixture ? '✏️ Edit Match Details' : '🏆 Quick Add or Auto-Generate League Matches'}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  {editingFixture 
+                    ? `Modify the properties for Match ID #${editingFixture.matchId?.toUpperCase()}.` 
+                    : 'Select players to create a manual match, or choose a Group to instantly seed a full Round-Robin.'
+                  }
+                </p>
+              </div>
+            </div>
+            {editingFixture && (
+              <button 
+                onClick={handleCancelEdit} 
+                className="px-3.5 py-1.5 text-xs font-bold text-slate-500 hover:text-slate-800 bg-white border border-slate-200 rounded-lg shadow-xs hover:bg-slate-50 transition flex items-center gap-1 shrink-0"
+              >
+                <X className="w-3.5 h-3.5" />
+                Cancel Edit
+              </button>
+            )}
+          </div>
 
         {/* Builder Inputs Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -515,6 +536,7 @@ export default function FixtureManager({ tournamentId, onNext }: { tournamentId:
           </span>
         </div>
       </div>
+      )}
 
       {/* FILTER & SEARCH TOOLS BAR */}
       <div className="bg-white border border-slate-100 p-5 rounded-2xl shadow-sm space-y-4">
@@ -736,22 +758,24 @@ export default function FixtureManager({ tournamentId, onNext }: { tournamentId:
                           </div>
 
                           {/* Quick Action Buttons */}
-                          <div className="flex items-center gap-1 bg-slate-50 p-0.5 rounded-lg border border-slate-100 shrink-0">
-                            <button 
-                              onClick={() => handleEdit(f)} 
-                              title="Edit Match"
-                              className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-white rounded transition"
-                            >
-                              <Edit3 className="w-3 h-3" />
-                            </button>
-                            <button 
-                              onClick={() => handleDelete(f.id)} 
-                              title="Delete Match"
-                              className="p-1 text-slate-400 hover:text-rose-600 hover:bg-white rounded transition"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
-                          </div>
+                          {isAdmin && (
+                            <div className="flex items-center gap-1 bg-slate-50 p-0.5 rounded-lg border border-slate-100 shrink-0">
+                              <button 
+                                onClick={() => handleEdit(f)} 
+                                title="Edit Match"
+                                className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-white rounded transition"
+                              >
+                                <Edit3 className="w-3 h-3" />
+                              </button>
+                              <button 
+                                onClick={() => handleDelete(f.id)} 
+                                title="Delete Match"
+                                className="p-1 text-slate-400 hover:text-rose-600 hover:bg-white rounded transition"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </div>
                     );

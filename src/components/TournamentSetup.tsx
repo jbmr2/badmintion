@@ -36,11 +36,13 @@ function FormField({ label, required, children }: { label: string, required?: bo
 export default function TournamentSetup({ 
   onNext, 
   editingId = null, 
-  onCancel 
+  onCancel,
+  userRole = 'user'
 }: { 
   onNext: (tournamentId: string) => void, 
   editingId?: string | null, 
-  onCancel?: () => void 
+  onCancel?: () => void,
+  userRole?: 'admin' | 'scorer' | 'user'
 }) {
   const [formData, setFormData] = useState({
     name: 'Summer Badminton Championship 2026',
@@ -217,6 +219,12 @@ export default function TournamentSetup({
         )}
       </div>
 
+      {userRole !== 'admin' && (
+        <div className="p-4 bg-amber-50 border border-amber-200 text-amber-700 rounded-2xl flex items-start gap-2 text-xs font-semibold">
+          ⚠️ Read-Only Mode: You must be an administrator to make changes or create tournaments.
+        </div>
+      )}
+
       <FormField label="Tournament Name" required><input type="text" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} className="w-full p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none" /></FormField>
       <FormField label="Organizer" required><input type="text" value={formData.organizer} onChange={(e) => setFormData({ ...formData, organizer: e.target.value })} className="w-full p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none" /></FormField>
       <FormField label="Venue" required><input type="text" value={formData.venue} onChange={(e) => setFormData({ ...formData, venue: e.target.value })} className="w-full p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none" /></FormField>
@@ -388,7 +396,8 @@ export default function TournamentSetup({
         )}
         <button 
           type="submit" 
-          className="flex-1 px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold transition shadow-md shadow-indigo-200 cursor-pointer"
+          disabled={userRole !== 'admin' || loading}
+          className="flex-1 px-4 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-400 text-white rounded-xl font-bold transition shadow-md disabled:shadow-none cursor-pointer"
         >
           {editingId ? 'Save Changes' : 'Create Tournament'}
         </button>

@@ -32,9 +32,11 @@ import {
 
 interface RefereePanelProps {
   tournamentId: string;
+  userRole?: 'admin' | 'scorer' | 'user';
 }
 
-export default function RefereePanel({ tournamentId }: RefereePanelProps) {
+export default function RefereePanel({ tournamentId, userRole = 'user' }: RefereePanelProps) {
+  const canScore = userRole === 'admin' || userRole === 'scorer';
   const [fixtures, setFixtures] = useState<any[]>([]);
   const [matches, setMatches] = useState<any[]>([]);
   const [courts, setCourts] = useState<string[]>(['Court 1', 'Court 2', 'Court 3', 'Court 4', 'Court 5', 'Court 6']);
@@ -667,14 +669,21 @@ export default function RefereePanel({ tournamentId }: RefereePanelProps) {
             {/* Left/Middle Column: Score Keeper and Set toggles */}
             <div className="lg:col-span-2 space-y-6">
               
+              {!canScore && (
+                <div className="p-4 bg-amber-50 border border-amber-200 text-amber-700 rounded-2xl flex items-start gap-2 text-xs font-semibold">
+                  ⚠️ Read-Only Mode: You must be an administrator or a designated scorer to record match scores or modify game parameters.
+                </div>
+              )}
+              
               {/* Setup / Configuration Widget */}
               <div className="bg-white p-4 rounded-2xl border border-slate-200 flex flex-wrap gap-4 justify-between items-center">
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-bold text-slate-500">Active Court:</span>
                   <select
                     value={activeFixture?.court || ''}
+                    disabled={!canScore}
                     onChange={e => handleCourtChange(e.target.value)}
-                    className="text-xs font-bold bg-slate-100 border border-slate-200 rounded-lg p-1.5 focus:outline-hidden"
+                    className="text-xs font-bold bg-slate-100 border border-slate-200 rounded-lg p-1.5 focus:outline-hidden disabled:opacity-75"
                   >
                     <option value="">No Court Assigned</option>
                     {courts.map(court => (
@@ -689,12 +698,13 @@ export default function RefereePanel({ tournamentId }: RefereePanelProps) {
                     {[11, 15, 21, 30].map(pt => (
                       <button
                         key={pt}
+                        disabled={!canScore}
                         onClick={() => handleTargetChange(pt)}
                         className={`px-2 py-1 text-[10px] font-black rounded-md ${
                           pointsTarget === pt 
                             ? 'bg-white text-slate-900 shadow-xs' 
                             : 'text-slate-500 hover:text-slate-800'
-                        }`}
+                        } disabled:opacity-75`}
                       >
                         {pt} pts
                       </button>
@@ -702,14 +712,16 @@ export default function RefereePanel({ tournamentId }: RefereePanelProps) {
                   </div>
                 </div>
 
-                <div>
-                  <button 
-                    onClick={() => setIsSwapped(!isSwapped)}
-                    className="inline-flex items-center gap-1.5 text-xs font-bold bg-slate-100 border border-slate-200 text-slate-600 hover:text-slate-950 hover:bg-slate-200 px-2.5 py-1.5 rounded-lg transition"
-                  >
-                    <ArrowLeftRight className="w-3.5 h-3.5" /> Swap Sides
-                  </button>
-                </div>
+                {canScore && (
+                  <div>
+                    <button 
+                      onClick={() => setIsSwapped(!isSwapped)}
+                      className="inline-flex items-center gap-1.5 text-xs font-bold bg-slate-100 border border-slate-200 text-slate-600 hover:text-slate-950 hover:bg-slate-200 px-2.5 py-1.5 rounded-lg transition"
+                    >
+                      <ArrowLeftRight className="w-3.5 h-3.5" /> Swap Sides
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Main Score Controller Card */}
@@ -768,24 +780,26 @@ export default function RefereePanel({ tournamentId }: RefereePanelProps) {
                         <div className="flex flex-col items-center gap-4">
                           <button
                             onClick={() => handleScoreChange(fieldName, 1)}
-                            disabled={activeFixture?.status === 'completed'}
-                            className="w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-slate-800 hover:bg-slate-700 active:scale-95 border-2 border-slate-700 hover:border-indigo-500 text-white transition flex flex-col items-center justify-center relative shadow-inner"
+                            disabled={!canScore || activeFixture?.status === 'completed'}
+                            className="w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-slate-800 hover:bg-slate-700 active:scale-95 border-2 border-slate-700 hover:border-indigo-500 text-white transition flex flex-col items-center justify-center relative shadow-inner disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <span className="text-4xl sm:text-5xl font-black font-mono tracking-tighter">{currentScore}</span>
-                            <span className="text-[9px] font-bold text-slate-500 uppercase mt-0.5">TAP TO ADD</span>
+                            <span className="text-[9px] font-bold text-slate-500 uppercase mt-0.5">{canScore ? "TAP TO ADD" : "READ ONLY"}</span>
                           </button>
 
                           <div className="flex gap-2">
                             <button
                               onClick={() => handleScoreChange(fieldName, -1)}
-                              className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition"
+                              disabled={!canScore}
+                              className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition disabled:opacity-50 disabled:cursor-not-allowed"
                               title="Subtract Point"
                             >
                               <Minus className="w-4 h-4" />
                             </button>
                             <button
                               onClick={() => handleScoreChange(fieldName, 5)}
-                              className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs font-bold transition"
+                              disabled={!canScore}
+                              className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs font-bold transition disabled:opacity-50 disabled:cursor-not-allowed"
                               title="Add 5 points"
                             >
                               +5
@@ -823,24 +837,26 @@ export default function RefereePanel({ tournamentId }: RefereePanelProps) {
                         <div className="flex flex-col items-center gap-4">
                           <button
                             onClick={() => handleScoreChange(fieldName, 1)}
-                            disabled={activeFixture?.status === 'completed'}
-                            className="w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-slate-800 hover:bg-slate-700 active:scale-95 border-2 border-slate-700 hover:border-indigo-500 text-white transition flex flex-col items-center justify-center relative shadow-inner"
+                            disabled={!canScore || activeFixture?.status === 'completed'}
+                            className="w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-slate-800 hover:bg-slate-700 active:scale-95 border-2 border-slate-700 hover:border-indigo-500 text-white transition flex flex-col items-center justify-center relative shadow-inner disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <span className="text-4xl sm:text-5xl font-black font-mono tracking-tighter">{currentScore}</span>
-                            <span className="text-[9px] font-bold text-slate-500 uppercase mt-0.5">TAP TO ADD</span>
+                            <span className="text-[9px] font-bold text-slate-500 uppercase mt-0.5">{canScore ? "TAP TO ADD" : "READ ONLY"}</span>
                           </button>
 
                           <div className="flex gap-2">
                             <button
                               onClick={() => handleScoreChange(fieldName, -1)}
-                              className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition"
+                              disabled={!canScore}
+                              className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition disabled:opacity-50 disabled:cursor-not-allowed"
                               title="Subtract Point"
                             >
                               <Minus className="w-4 h-4" />
                             </button>
                             <button
                               onClick={() => handleScoreChange(fieldName, 5)}
-                              className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs font-bold transition"
+                              disabled={!canScore}
+                              className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs font-bold transition disabled:opacity-50 disabled:cursor-not-allowed"
                               title="Add 5 points"
                             >
                               +5
@@ -953,21 +969,29 @@ export default function RefereePanel({ tournamentId }: RefereePanelProps) {
                 </p>
 
                 <div className="space-y-2.5 pt-2">
-                  <button
-                    onClick={completeMatch}
-                    disabled={saving}
-                    className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-sm py-3 px-4 rounded-xl transition shadow-xs disabled:opacity-50"
-                  >
-                    <CheckCircle2 className="w-4 h-4" /> Save & Finalize Match
-                  </button>
+                  {canScore ? (
+                    <>
+                      <button
+                        onClick={completeMatch}
+                        disabled={saving}
+                        className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-sm py-3 px-4 rounded-xl transition shadow-xs disabled:opacity-50"
+                      >
+                        <CheckCircle2 className="w-4 h-4" /> Save & Finalize Match
+                      </button>
 
-                  <button
-                    onClick={resetMatch}
-                    disabled={saving}
-                    className="w-full flex items-center justify-center gap-2 bg-rose-50 hover:bg-rose-100 text-rose-700 font-extrabold text-xs py-2.5 px-4 rounded-xl transition disabled:opacity-50"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" /> Reset Match
-                  </button>
+                      <button
+                        onClick={resetMatch}
+                        disabled={saving}
+                        className="w-full flex items-center justify-center gap-2 bg-rose-50 hover:bg-rose-100 text-rose-700 font-extrabold text-xs py-2.5 px-4 rounded-xl transition disabled:opacity-50"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" /> Reset Match
+                      </button>
+                    </>
+                  ) : (
+                    <div className="p-3 bg-slate-50 border border-slate-200 text-slate-500 rounded-xl text-[11px] font-medium text-center">
+                      🔒 Match finalization is locked (Read-Only Mode)
+                    </div>
+                  )}
                 </div>
               </div>
 

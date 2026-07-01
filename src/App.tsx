@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { auth, signInWithGoogle, signOutUser } from './lib/firebase';
+import { db, auth, signInWithGoogle, signOutUser } from './lib/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
+import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 import SystemHealthHeader from './components/SystemHealthHeader';
 import TournamentSetup from './components/TournamentSetup';
 import CategoryManager from './components/CategoryManager';
@@ -17,14 +18,16 @@ import SystemMonitor from './components/SystemMonitor';
 import OBSTicker from './components/OBSTicker';
 import RefereePanel from './components/RefereePanel';
 import GlobalPlayerRegistry from './components/GlobalPlayerRegistry';
+import RoleManager from './components/RoleManager';
 
-type Step = 'home' | 'setup' | 'details' | 'categories' | 'players' | 'groups' | 'hierarchy' | 'fixtures' | 'scores' | 'points' | 'bracket' | 'champion' | 'monitor' | 'referee' | 'global-players';
+type Step = 'home' | 'setup' | 'details' | 'categories' | 'players' | 'groups' | 'hierarchy' | 'fixtures' | 'scores' | 'points' | 'bracket' | 'champion' | 'monitor' | 'referee' | 'global-players' | 'roles';
 
 export default function App() {
   const [step, setStep] = useState<Step>(() => (localStorage.getItem('app-step') as Step) || 'home');
   const [tournamentId, setTournamentId] = useState<string | null>(() => localStorage.getItem('tournament-id'));
   const [editingTournamentId, setEditingTournamentId] = useState<string | null>(null);
   const [user, setUser] = useState<any>(null);
+  const [userRole, setUserRole] = useState<'admin' | 'scorer' | 'user'>('user');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -37,12 +40,56 @@ export default function App() {
   }, [step, tournamentId]);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setUser(user);
-      setLoading(false);
+    const unsubscribe = onAuthStateChanged(auth, (authUser) => {
+      setUser(authUser);
+      if (!authUser) {
+        setUserRole('user');
+        setLoading(false);
+      }
     });
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    setLoading(true);
+
+    const emailLower = (user.email || '').trim().toLowerCase();
+    const isSuperAdmin = emailLower === 'jbmrsports@gmail.com';
+
+    // Set up a listener for the user's role
+    const unsubscribeRole = onSnapshot(doc(db, 'user_roles', emailLower), (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        setUserRole(data.role || 'user');
+        setLoading(false);
+      } else {
+        // If they are the super admin and no record exists, create one!
+        if (isSuperAdmin) {
+          setUserRole('admin');
+          setDoc(doc(db, 'user_roles', emailLower), {
+            email: emailLower,
+            role: 'admin',
+            displayName: user.displayName || 'Super Admin'
+          }).then(() => {
+            setLoading(false);
+          }).catch((err) => {
+            console.error("Error creating super admin:", err);
+            setLoading(false);
+          });
+        } else {
+          setUserRole('user');
+          setLoading(false);
+        }
+      }
+    }, (error) => {
+      console.error("Error reading role:", error);
+      setUserRole(isSuperAdmin ? 'admin' : 'user');
+      setLoading(false);
+    });
+
+    return () => unsubscribeRole();
+  }, [user]);
 
   const handleTournamentCreated = (id: string) => {
     setTournamentId(id);
@@ -55,7 +102,7 @@ export default function App() {
   };
 
   const goBack = () => {
-    if (step === 'categories' || step === 'players' || step === 'groups' || step === 'hierarchy' || step === 'fixtures' || step === 'scores' || step === 'points' || step === 'monitor' || step === 'referee') {
+    if (step === 'categories' || step === 'players' || step === 'groups' || step === 'hierarchy' || step === 'fixtures' || step === 'scores' || step === 'points' || step === 'monitor' || step === 'referee' || step === 'roles') {
       setStep('details');
     } else if (step === 'details' || step === 'global-players') {
       setStep('home');
@@ -109,6 +156,7 @@ export default function App() {
               {step === 'home' && (
                 <motion.div key="home" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
                   <TournamentList 
+                    userRole={userRole}
                     onCreateTournament={() => {
                       setEditingTournamentId(null);
                       setStep('setup');
@@ -132,6 +180,7 @@ export default function App() {
               {step === 'setup' && (
                 <motion.div key="setup" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
                   <TournamentSetup 
+                    userRole={userRole}
                     onNext={(id) => {
                       setEditingTournamentId(null);
                       handleTournamentCreated(id);
@@ -146,37 +195,37 @@ export default function App() {
               )}
               {step === 'details' && tournamentId && (
                 <motion.div key="details" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-                  <Dashboard tournamentId={tournamentId} onNavigate={setStep} />
+                  <Dashboard tournamentId={tournamentId} onNavigate={setStep} userRole={userRole} />
                 </motion.div>
               )}
               {step === 'categories' && tournamentId && (
                 <motion.div key="categories" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-                  <CategoryManager tournamentId={tournamentId} onNext={() => setStep('players')} />
+                  <CategoryManager tournamentId={tournamentId} onNext={() => setStep('players')} userRole={userRole} />
                 </motion.div>
               )}
               {step === 'players' && tournamentId && (
                 <motion.div key="players" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-                  <PlayerManager tournamentId={tournamentId} />
+                  <PlayerManager tournamentId={tournamentId} userRole={userRole} />
                 </motion.div>
               )}
               {step === 'groups' && tournamentId && (
                 <motion.div key="groups" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-                  <GroupManager tournamentId={tournamentId} onNext={() => setStep('fixtures')} />
+                  <GroupManager tournamentId={tournamentId} onNext={() => setStep('fixtures')} userRole={userRole} />
                 </motion.div>
               )}
               {step === 'hierarchy' && (
                 <motion.div key="hierarchy" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-                  <HierarchyManager tournamentId={tournamentId || undefined} />
+                  <HierarchyManager tournamentId={tournamentId || undefined} userRole={userRole} />
                 </motion.div>
               )}
               {step === 'fixtures' && tournamentId && (
                 <motion.div key="fixtures" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-                  <FixtureManager tournamentId={tournamentId} onNext={() => setStep('scores')} />
+                  <FixtureManager tournamentId={tournamentId} onNext={() => setStep('scores')} userRole={userRole} />
                 </motion.div>
               )}
               {step === 'scores' && tournamentId && (
                 <motion.div key="scores" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-                  <MatchScoreManager tournamentId={tournamentId} onNext={() => setStep('points')} />
+                  <MatchScoreManager tournamentId={tournamentId} onNext={() => setStep('points')} userRole={userRole} />
                 </motion.div>
               )}
               {step === 'points' && tournamentId && (
@@ -191,7 +240,12 @@ export default function App() {
               )}
               {step === 'referee' && tournamentId && (
                 <motion.div key="referee" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="max-w-none">
-                  <RefereePanel tournamentId={tournamentId} />
+                  <RefereePanel tournamentId={tournamentId} userRole={userRole} />
+                </motion.div>
+              )}
+              {step === 'roles' && (
+                <motion.div key="roles" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
+                  <RoleManager />
                 </motion.div>
               )}
             </AnimatePresence>

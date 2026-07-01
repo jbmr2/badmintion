@@ -1,10 +1,18 @@
 import { useState, useEffect } from 'react';
 import { db } from '../lib/firebase';
 import { collection, query, onSnapshot } from 'firebase/firestore';
-import { Users, Trophy, ClipboardList, Target, Medal, Activity, Shield } from 'lucide-react';
+import { Users, Trophy, ClipboardList, Target, Medal, Activity, Shield, UserCheck } from 'lucide-react';
 import RecentMatches from './RecentMatches';
 
-export default function Dashboard({ tournamentId, onNavigate }: { tournamentId: string, onNavigate: (step: any) => void }) {
+export default function Dashboard({ 
+  tournamentId, 
+  onNavigate, 
+  userRole = 'user' 
+}: { 
+  tournamentId: string; 
+  onNavigate: (step: any) => void; 
+  userRole?: 'admin' | 'scorer' | 'user'; 
+}) {
   const [stats, setStats] = useState({ players: 0, completedMatches: 0, totalFixtures: 0 });
 
   useEffect(() => {
@@ -41,9 +49,31 @@ export default function Dashboard({ tournamentId, onNavigate }: { tournamentId: 
     { label: 'System Monitor', id: 'monitor', icon: Activity },
   ];
 
+  // If the user is an admin, show the Roles page in dashboard
+  if (userRole === 'admin') {
+    navItems.push({ label: 'User Roles', id: 'roles', icon: UserCheck });
+  }
+
+  const getRoleBadge = () => {
+    switch (userRole) {
+      case 'admin':
+        return <span className="px-3 py-1 bg-rose-50 text-rose-700 text-xs font-black rounded-full border border-rose-200">👑 Administrator</span>;
+      case 'scorer':
+        return <span className="px-3 py-1 bg-amber-50 text-amber-700 text-xs font-black rounded-full border border-amber-200">✏️ Scorer</span>;
+      default:
+        return <span className="px-3 py-1 bg-slate-100 text-slate-500 text-xs font-semibold rounded-full border border-slate-200">👁️ Read-Only Viewer</span>;
+    }
+  };
+
   return (
     <div className="space-y-8 font-sans">
-      <h2 className="text-3xl font-extrabold text-slate-800 tracking-tight">Tournament: {tournamentId}</h2>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <h2 className="text-3xl font-extrabold text-slate-800 tracking-tight">Tournament: {tournamentId}</h2>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-slate-400 font-bold uppercase tracking-wider">Your Access:</span>
+          {getRoleBadge()}
+        </div>
+      </div>
       
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-4">

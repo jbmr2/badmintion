@@ -2,13 +2,23 @@ import { useState, useEffect } from 'react';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, addDoc, onSnapshot, query, getDocs, deleteDoc, doc } from 'firebase/firestore';
 
-export default function GroupManager({ tournamentId, onNext }: { tournamentId: string, onNext: () => void }) {
+export default function GroupManager({ 
+  tournamentId, 
+  onNext,
+  userRole = 'user'
+}: { 
+  tournamentId: string; 
+  onNext: () => void;
+  userRole?: 'admin' | 'scorer' | 'user';
+}) {
   const [players, setPlayers] = useState<any[]>([]);
   const [playerAssignments, setPlayerAssignments] = useState<{ [playerId: string]: string }>({});
   const [groups, setGroups] = useState<{id: string, name: string}[]>([]);
 
   const [groupsCreated, setGroupsCreated] = useState<boolean>(false);
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
+
+  const isAdmin = userRole === 'admin';
 
   // const groupOptions = Array.from({ length: numberOfGroups }, (_, i) => `Group ${String.fromCharCode(65 + i)}`);
 
@@ -105,42 +115,60 @@ export default function GroupManager({ tournamentId, onNext }: { tournamentId: s
 
   return (
     <div className="space-y-6 p-6 bg-white rounded-2xl shadow-sm border border-slate-100">
-      <h2 className="text-2xl font-bold text-slate-800">Manual Group Assignment</h2>
+      <div className="flex justify-between items-center pb-2 border-b">
+        <h2 className="text-2xl font-bold text-slate-800">Manual Group Assignment</h2>
+        {!isAdmin && (
+          <span className="px-3 py-1 bg-amber-50 text-amber-700 text-xs font-semibold rounded-full border border-amber-200">
+            👁️ Read-Only
+          </span>
+        )}
+      </div>
       
       {successMessage && <div className="p-4 bg-emerald-100 text-emerald-800 rounded-xl font-medium">{successMessage}</div>}
       
-      <div className="flex gap-4 items-center">
-        <button onClick={() => setGroups([...groups, {id: Date.now().toString(), name: `Group ${String.fromCharCode(65 + groups.length)}`}])} className="px-6 py-2 bg-indigo-600 text-white font-semibold rounded-xl hover:bg-indigo-700 transition">Add Group</button>
-        <button onClick={() => setGroupsCreated(true)} className="px-6 py-2 bg-emerald-600 text-white font-semibold rounded-xl hover:bg-emerald-700 transition">Apply Groups</button>
-      </div>
+      {!isAdmin && (
+        <div className="p-4 bg-amber-50 border border-amber-200 text-amber-700 rounded-2xl flex items-start gap-2 text-xs font-semibold">
+          ⚠️ Read-Only Mode: You must be an administrator to configure groups or assign players.
+        </div>
+      )}
 
-      {groupsCreated && (
+      {isAdmin && (
+        <div className="flex gap-4 items-center">
+          <button onClick={() => setGroups([...groups, {id: Date.now().toString(), name: `Group ${String.fromCharCode(65 + groups.length)}`}])} className="px-6 py-2 bg-indigo-600 text-white font-semibold rounded-xl hover:bg-indigo-700 transition cursor-pointer">Add Group</button>
+          <button onClick={() => setGroupsCreated(true)} className="px-6 py-2 bg-emerald-600 text-white font-semibold rounded-xl hover:bg-emerald-700 transition cursor-pointer">Apply Groups</button>
+        </div>
+      )}
+
+      {(groupsCreated || !isAdmin) && (
         <>
             <div className="grid gap-6 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
                 {groups.map(group => (
                     <div 
                       key={group.id} 
-                      className={`p-4 rounded-2xl border transition-all cursor-pointer ${selectedGroup === group.name ? 'bg-indigo-50 border-indigo-500 shadow-sm' : 'bg-white border-slate-200 hover:border-slate-300'}`}
-                      onClick={() => setSelectedGroup(group.name)}
+                      className={`p-4 rounded-2xl border transition-all ${isAdmin ? 'cursor-pointer' : ''} ${selectedGroup === group.name && isAdmin ? 'bg-indigo-50 border-indigo-500 shadow-sm' : 'bg-white border-slate-200'}`}
+                      onClick={() => isAdmin && setSelectedGroup(group.name)}
                     >
                         <div className="flex justify-between items-center mb-4">
                             <input 
                                 value={group.name} 
+                                readOnly={!isAdmin}
                                 onChange={(e) => setGroups(groups.map(g => g.id === group.id ? {...g, name: e.target.value} : g))}
-                                className="font-bold text-lg text-slate-800 border-none bg-transparent w-full focus:ring-0"
+                                className="font-bold text-lg text-slate-800 border-none bg-transparent w-full focus:ring-0 outline-none"
                             />
-                            <button onClick={(e) => { e.stopPropagation(); setGroups(groups.filter(g => g.id !== group.id)); }} className="text-rose-500 hover:text-rose-700 text-sm font-medium">Delete</button>
+                            {isAdmin && (
+                              <button onClick={(e) => { e.stopPropagation(); setGroups(groups.filter(g => g.id !== group.id)); }} className="text-rose-500 hover:text-rose-700 text-sm font-medium cursor-pointer">Delete</button>
+                            )}
                         </div>
                         <ul className="text-sm text-slate-600 space-y-1">
                             {players.filter(p => playerAssignments[p.id] === group.name).map(p => (
-                                <li key={p.id} className="bg-slate-50 p-2 rounded-lg">{p.name}</li>
+                                <li key={p.id} className="bg-slate-50 p-2 rounded-lg text-xs font-medium text-slate-700">{p.name}</li>
                             ))}
                         </ul>
                     </div>
                 ))}
             </div>
 
-            {selectedGroup && (
+            {isAdmin && selectedGroup && (
               <div className="space-y-4 border-t border-slate-100 pt-6">
                   <h3 className="font-bold text-slate-800">Assign Players to {selectedGroup}</h3>
                   <div className="flex flex-wrap gap-2">
@@ -150,7 +178,7 @@ export default function GroupManager({ tournamentId, onNext }: { tournamentId: s
                       <button
                         key={p.id}
                         onClick={() => setPlayerAssignments({...playerAssignments, [p.id]: selectedGroup})}
-                        className="px-4 py-2 bg-slate-100 hover:bg-indigo-100 text-slate-700 hover:text-indigo-800 rounded-xl transition font-medium"
+                        className="px-4 py-2 bg-slate-100 hover:bg-indigo-100 text-slate-700 hover:text-indigo-800 rounded-xl transition font-medium cursor-pointer"
                       >
                           {p.name}
                       </button>
@@ -158,8 +186,11 @@ export default function GroupManager({ tournamentId, onNext }: { tournamentId: s
                   </div>
               </div>
             )}
-            <div className="flex gap-2 pt-4">
-                <button onClick={saveGroups} className="px-6 py-2 bg-emerald-600 text-white font-semibold rounded-xl hover:bg-emerald-700 transition">Save Groups</button>
+            <div className="flex gap-4 pt-4">
+                {isAdmin && (
+                  <button onClick={saveGroups} className="px-6 py-2 bg-emerald-600 text-white font-semibold rounded-xl hover:bg-emerald-700 transition cursor-pointer">Save Groups</button>
+                )}
+                <button onClick={onNext} className="px-6 py-2 bg-indigo-600 text-white font-semibold rounded-xl hover:bg-indigo-700 transition cursor-pointer">Next: Fixtures</button>
             </div>
         </>
       )}

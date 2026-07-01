@@ -34,7 +34,16 @@ import {
   Check
 } from 'lucide-react';
 
-export default function MatchScoreManager({ tournamentId, onNext }: { tournamentId: string, onNext: () => void }) {
+export default function MatchScoreManager({ 
+  tournamentId, 
+  onNext,
+  userRole = 'user'
+}: { 
+  tournamentId: string; 
+  onNext: () => void;
+  userRole?: 'admin' | 'scorer' | 'user';
+}) {
+  const canScore = userRole === 'admin' || userRole === 'scorer';
   const [fixtures, setFixtures] = useState<any[]>([]);
   const [matches, setMatches] = useState<any[]>([]);
   const [scores, setScores] = useState<any>({});
@@ -198,6 +207,7 @@ export default function MatchScoreManager({ tournamentId, onNext }: { tournament
 
   // Update a single score field locally and sync to Firestore if live
   const updateScore = async (fixtureId: string, field: string, delta: number) => {
+    if (!canScore) return;
     const currentScores = scores[fixtureId] || { p1g1: 0, p2g1: 0, p1g2: 0, p2g2: 0, p1g3: 0, p2g3: 0 };
     
     // In professional badminton, max score is capped at 30 points
@@ -777,6 +787,11 @@ export default function MatchScoreManager({ tournamentId, onNext }: { tournament
       ) : (
         /* Active Scoring View Panel */
         <div className="space-y-6 border border-slate-200 p-4 sm:p-6 rounded-3xl bg-slate-50/50 shadow-md">
+          {!canScore && (
+            <div className="p-4 bg-amber-50 border border-amber-200 text-amber-700 rounded-2xl flex items-start gap-2 text-xs font-semibold">
+              ⚠️ Read-Only Mode: You must be an administrator or a designated scorer to record match scores or modify game parameters.
+            </div>
+          )}
           {/* Header Controls */}
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-4 border-b border-slate-200">
             <button 
@@ -853,6 +868,7 @@ export default function MatchScoreManager({ tournamentId, onNext }: { tournament
                   return (
                     <button
                       key={courtOpt}
+                      disabled={!canScore}
                       onClick={async () => {
                         await updateDoc(doc(db, `tournaments/${tournamentId}/fixtures`, activeFixture.id), {
                           court: courtOpt
@@ -862,7 +878,7 @@ export default function MatchScoreManager({ tournamentId, onNext }: { tournament
                         isSelected 
                           ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs' 
                           : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                      }`}
+                      } disabled:opacity-60 disabled:cursor-not-allowed`}
                     >
                       {courtOpt}
                     </button>
@@ -1141,31 +1157,39 @@ export default function MatchScoreManager({ tournamentId, onNext }: { tournament
 
           {/* Scoring Actions Block */}
           <div className="flex flex-col sm:flex-row gap-3 pt-4 border-t border-slate-200">
-            <button 
-              onClick={() => saveScore(activeFixture.id)} 
-              disabled={saving}
-              className="px-6 py-3.5 bg-emerald-600 text-white font-extrabold rounded-xl hover:bg-emerald-700 transition w-full sm:w-auto shadow-md hover:shadow-lg flex items-center justify-center gap-1.5 disabled:opacity-50"
-            >
-              <CheckCircle2 className="w-5 h-5" /> {saving ? "Saving Match..." : "Save Match & End"}
-            </button>
-            <button
-              onClick={() => {
-                if (window.confirm("Are you sure you want to clear current set's scores back to 0?")) {
-                  updateScore(activeFixture.id, `p1g${currentSetIndex}`, -scores[activeFixture.id]?.[`p1g${currentSetIndex}`] || 0);
-                  updateScore(activeFixture.id, `p2g${currentSetIndex}`, -scores[activeFixture.id]?.[`p2g${currentSetIndex}`] || 0);
-                }
-              }}
-              className="px-5 py-3.5 bg-white border border-slate-200 text-slate-600 hover:text-slate-800 hover:bg-slate-100 font-bold rounded-xl transition flex items-center justify-center gap-1.5 shadow-2xs"
-            >
-              <RefreshCw className="w-4 h-4 text-slate-400" /> Clear Set {currentSetIndex}
-            </button>
-            <button 
-              onClick={() => resetMatch(activeFixture.id)}
-              disabled={saving}
-              className="px-5 py-3.5 bg-rose-50 border border-rose-100 hover:bg-rose-100 text-rose-700 font-bold rounded-xl transition w-full sm:w-auto flex items-center justify-center gap-1.5 disabled:opacity-50"
-            >
-              <RotateCcw className="w-4 h-4" /> Reset Whole Match
-            </button>
+            {canScore ? (
+              <>
+                <button 
+                  onClick={() => saveScore(activeFixture.id)} 
+                  disabled={saving}
+                  className="px-6 py-3.5 bg-emerald-600 text-white font-extrabold rounded-xl hover:bg-emerald-700 transition w-full sm:w-auto shadow-md hover:shadow-lg flex items-center justify-center gap-1.5 disabled:opacity-50"
+                >
+                  <CheckCircle2 className="w-5 h-5" /> {saving ? "Saving Match..." : "Save Match & End"}
+                </button>
+                <button
+                  onClick={() => {
+                    if (window.confirm("Are you sure you want to clear current set's scores back to 0?")) {
+                      updateScore(activeFixture.id, `p1g${currentSetIndex}`, -scores[activeFixture.id]?.[`p1g${currentSetIndex}`] || 0);
+                      updateScore(activeFixture.id, `p2g${currentSetIndex}`, -scores[activeFixture.id]?.[`p2g${currentSetIndex}`] || 0);
+                    }
+                  }}
+                  className="px-5 py-3.5 bg-white border border-slate-200 text-slate-600 hover:text-slate-800 hover:bg-slate-100 font-bold rounded-xl transition flex items-center justify-center gap-1.5 shadow-2xs"
+                >
+                  <RefreshCw className="w-4 h-4 text-slate-400" /> Clear Set {currentSetIndex}
+                </button>
+                <button 
+                  onClick={() => resetMatch(activeFixture.id)}
+                  disabled={saving}
+                  className="px-5 py-3.5 bg-rose-50 border border-rose-100 hover:bg-rose-100 text-rose-700 font-bold rounded-xl transition w-full sm:w-auto flex items-center justify-center gap-1.5 disabled:opacity-50"
+                >
+                  <RotateCcw className="w-4 h-4" /> Reset Whole Match
+                </button>
+              </>
+            ) : (
+              <div className="text-sm font-semibold text-amber-600 bg-amber-50 border border-amber-100 px-4 py-3 rounded-xl flex items-center gap-2">
+                🔒 Match finalization is locked (Read-Only Mode)
+              </div>
+            )}
             <button 
               onClick={() => setActiveFixtureId(null)}
               className="px-5 py-3.5 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold rounded-xl transition w-full sm:w-auto text-center sm:ml-auto"
