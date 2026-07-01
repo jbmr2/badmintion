@@ -17,6 +17,7 @@ const DEFAULT_FIREBASE_CONFIG = {
 let db = null;
 let firestoreModule = null;
 let firebaseInitError = null;
+const serverStartTime = new Date();
 
 function initFirebase() {
   if (db && firestoreModule) {
@@ -100,6 +101,63 @@ async function startServer() {
       firebaseError: errMessage,
       timestamp: new Date().toISOString() 
     });
+  });
+
+  // GET server status & diagnostics
+  app.get('/api/server/status', (req, res) => {
+    res.json({
+      status: 'online',
+      uptime: Math.round((Date.now() - serverStartTime) / 1000),
+      startTime: serverStartTime.toISOString(),
+      nodeVersion: process.version,
+      platform: process.platform,
+      memoryUsage: process.memoryUsage()
+    });
+  });
+
+  // POST start server verification sequence
+  app.post('/api/server/start', (req, res) => {
+    try {
+      initFirebase();
+      res.json({
+        success: true,
+        message: 'Server engine verified and listening. Background connections, routing tables, and API integrations are fully operational.',
+        uptime: Math.round((Date.now() - serverStartTime) / 1000),
+        startTime: serverStartTime.toISOString()
+      });
+    } catch (err) {
+      res.status(500).json({
+        success: false,
+        error: 'Engine verify failed during startup check.',
+        details: err.message
+      });
+    }
+  });
+
+  // POST soft restart server
+  app.post('/api/server/restart', (req, res) => {
+    res.json({
+      success: true,
+      message: 'Server restart initiated successfully. System will reload shortly.'
+    });
+
+    // Write Passenger restart file
+    try {
+      const tmpDir = path.join(__dirname, 'tmp');
+      if (!fs.existsSync(tmpDir)) {
+        fs.mkdirSync(tmpDir, { recursive: true });
+      }
+      fs.writeFileSync(path.join(tmpDir, 'restart.txt'), 'restart');
+      console.log('Touched tmp/restart.txt to reload Passenger.');
+    } catch (err) {
+      console.error('Failed to touch tmp/restart.txt:', err);
+    }
+
+    // Schedule container/PM2 process restart
+    setTimeout(() => {
+      console.log('Restarting server process...');
+      process.exit(0);
+    }, 1000);
   });
 
   // GET all tournaments

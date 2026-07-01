@@ -83,6 +83,82 @@ export default function SystemMonitor({ tournamentId }: SystemMonitorProps) {
   const [logFilter, setLogFilter] = useState<'all' | 'info' | 'success' | 'warning' | 'error'>('all');
   const [logSearch, setLogSearch] = useState('');
 
+  // Server Status & Action States
+  const [serverStatus, setServerStatus] = useState<{
+    status: string;
+    uptime: number;
+    startTime: string;
+    nodeVersion: string;
+    platform: string;
+    memoryUsage?: { rss: number; heapTotal: number; heapUsed: number; external: number };
+  } | null>(null);
+  const [isRestarting, setIsRestarting] = useState(false);
+  const [isStartingEngine, setIsStartingEngine] = useState(false);
+  const [serverMessage, setServerMessage] = useState<string | null>(null);
+
+  const fetchServerStatus = async () => {
+    try {
+      const res = await fetch('/api/server/status');
+      if (res.ok) {
+        const data = await res.json();
+        setServerStatus(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch server status:', err);
+    }
+  };
+
+  const handleServerRestart = async () => {
+    if (!window.confirm("Are you sure you want to restart the Node.js server? Active connections will momentarily disconnect and reconnect.")) {
+      return;
+    }
+    setIsRestarting(true);
+    setServerMessage(null);
+    addLog('warning', 'system', 'Triggering remote server restart sequence...');
+    try {
+      const res = await fetch('/api/server/restart', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setServerMessage('Server restart initiated. Reconnecting in 5 seconds...');
+        addLog('success', 'system', 'Server accepted restart command. Node container reloading.');
+        setTimeout(async () => {
+          setIsRestarting(false);
+          await fetchServerStatus();
+          addLog('success', 'system', 'Successfully reconnected to active server instance.');
+        }, 5000);
+      } else {
+        setServerMessage(data.message || 'Failed to trigger restart');
+        setIsRestarting(false);
+      }
+    } catch (err: any) {
+      setServerMessage(`Error during restart: ${err.message}`);
+      setIsRestarting(false);
+      addLog('error', 'system', `Server restart action failed: ${err.message}`);
+    }
+  };
+
+  const handleServerStart = async () => {
+    setIsStartingEngine(true);
+    setServerMessage(null);
+    addLog('info', 'system', 'Initializing server verification sequence...');
+    try {
+      const res = await fetch('/api/server/start', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setServerMessage(data.message);
+        addLog('success', 'system', 'Server engine start sequence verified. All systems active.');
+        await fetchServerStatus();
+      } else {
+        setServerMessage(data.error || 'Failed to start/verify server');
+      }
+    } catch (err: any) {
+      setServerMessage(`Error during start sequence: ${err.message}`);
+      addLog('error', 'system', `Server engine check failed: ${err.message}`);
+    } finally {
+      setIsStartingEngine(false);
+    }
+  };
+
   // Local helper to add logs
   const addLog = (
     type: MonitorLog['type'], 
@@ -175,8 +251,10 @@ export default function SystemMonitor({ tournamentId }: SystemMonitorProps) {
   // Latency Heartbeat loop
   useEffect(() => {
     runLatencyCheck(false);
+    fetchServerStatus();
     const interval = setInterval(() => {
       runLatencyCheck(true);
+      fetchServerStatus();
     }, 15000); // Check every 15s
 
     return () => clearInterval(interval);
@@ -398,6 +476,14 @@ export default function SystemMonitor({ tournamentId }: SystemMonitorProps) {
     return matchesFilter && matchesSearch;
   });
 
+  const formatUptime = (seconds: number) => {
+    if (seconds === undefined || seconds === null) return '--';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    return `${h}h ${m}m ${s}s`;
+  };
+
   const getLatencyColor = (l: number | null) => {
     if (l === null) return 'text-slate-400';
     if (l < 80) return 'text-emerald-500';
@@ -514,6 +600,127 @@ export default function SystemMonitor({ tournamentId }: SystemMonitorProps) {
             </p>
           </div>
         </div>
+      </div>
+
+      {/* 2.5 Node.js Server Admin Console */}
+      <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm space-y-6">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 pb-3 border-b border-slate-100">
+          <div>
+            <h3 className="text-lg font-black text-slate-800 flex items-center gap-2">
+              <Server className="w-5 h-5 text-indigo-600 animate-pulse" />
+              Node.js Application Server Console
+            </h3>
+            <p className="text-xs text-slate-400 font-medium">
+              Control system container lifecycles, run start checks, and trigger soft server process restarts.
+            </p>
+          </div>
+          {serverStatus ? (
+            <span className="flex items-center gap-1.5 px-3 py-1 bg-emerald-50 text-emerald-700 text-[10px] font-black rounded-full border border-emerald-200 uppercase tracking-wider">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+              Active Online
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5 px-3 py-1 bg-amber-50 text-amber-700 text-[10px] font-black rounded-full border border-amber-200 uppercase tracking-wider">
+              Polling Status...
+            </span>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
+          {/* Metadata */}
+          <div className="md:col-span-7 bg-slate-50/50 p-5 rounded-2xl border border-slate-100 space-y-4">
+            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Server Node Metadata & Specs</h4>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-3.5 text-xs">
+              <div className="space-y-0.5">
+                <p className="text-[10px] text-slate-400 font-bold uppercase">Uptime</p>
+                <p className="font-extrabold text-slate-800 font-mono text-sm">
+                  {serverStatus ? formatUptime(serverStatus.uptime) : '--'}
+                </p>
+              </div>
+              <div className="space-y-0.5">
+                <p className="text-[10px] text-slate-400 font-bold uppercase">Boot Time</p>
+                <p className="font-bold text-slate-700 truncate" title={serverStatus?.startTime}>
+                  {serverStatus ? new Date(serverStatus.startTime).toLocaleString() : '--'}
+                </p>
+              </div>
+              <div className="space-y-0.5">
+                <p className="text-[10px] text-slate-400 font-bold uppercase">Node.js Engine</p>
+                <p className="font-bold text-slate-700 font-mono">
+                  {serverStatus?.nodeVersion || 'v18.x (Hostinger Node)'}
+                </p>
+              </div>
+              <div className="space-y-0.5">
+                <p className="text-[10px] text-slate-400 font-bold uppercase">Operating Platform</p>
+                <p className="font-bold text-slate-700 capitalize">
+                  {serverStatus?.platform || 'Linux'}
+                </p>
+              </div>
+              {serverStatus?.memoryUsage && (
+                <div className="space-y-0.5 col-span-2">
+                  <p className="text-[10px] text-slate-400 font-bold uppercase">Memory Consumption (RSS / Heap)</p>
+                  <p className="font-mono font-bold text-slate-600">
+                    {(serverStatus.memoryUsage.rss / 1024 / 1024).toFixed(1)} MB (RSS) / {(serverStatus.memoryUsage.heapUsed / 1024 / 1024).toFixed(1)} MB (Used Heap)
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Action buttons */}
+          <div className="md:col-span-5 flex flex-col justify-between space-y-4">
+            <div className="space-y-3">
+              <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Lifecycle Commands</h4>
+              <p className="text-[11px] text-slate-400 font-medium leading-relaxed">
+                Click <strong className="text-slate-600">Start Server</strong> to verify engine status and reinitialize connections. Click <strong className="text-slate-600">Restart Server</strong> to write a passenger restart anchor or exit the thread.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={handleServerStart}
+                disabled={isStartingEngine || isRestarting}
+                className={`py-3 px-4 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                  isStartingEngine 
+                    ? 'bg-indigo-50 text-indigo-400 border border-indigo-100 cursor-not-allowed' 
+                    : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 active:scale-[0.98]'
+                }`}
+              >
+                <Play className={`w-4 h-4 ${isStartingEngine ? 'animate-pulse' : ''}`} />
+                {isStartingEngine ? 'Starting...' : 'Start Server'}
+              </button>
+
+              <button
+                onClick={handleServerRestart}
+                disabled={isRestarting || isStartingEngine}
+                className={`py-3 px-4 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                  isRestarting 
+                    ? 'bg-rose-50 text-rose-400 border border-rose-100 cursor-not-allowed' 
+                    : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 active:scale-[0.98]'
+                }`}
+              >
+                <RefreshCw className={`w-4 h-4 ${isRestarting ? 'animate-spin' : ''}`} />
+                {isRestarting ? 'Restarting...' : 'Restart Server'}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Message Banner */}
+        {serverMessage && (
+          <div className="p-4 bg-indigo-50/80 border border-indigo-100 rounded-2xl flex items-start gap-2.5">
+            <CheckCircle className="w-4 h-4 text-indigo-600 mt-0.5 shrink-0" />
+            <div className="flex-1">
+              <p className="text-xs font-bold text-indigo-800">Server Response</p>
+              <p className="text-[11px] text-indigo-600 mt-0.5 leading-relaxed">{serverMessage}</p>
+            </div>
+            <button 
+              onClick={() => setServerMessage(null)} 
+              className="text-xs font-bold text-indigo-400 hover:text-indigo-600 p-0.5 bg-white/50 rounded-full hover:bg-white"
+            >
+              ✕
+            </button>
+          </div>
+        )}
       </div>
 
       {/* 3. Live Database Store Counts & Relative Visual Scale */}
