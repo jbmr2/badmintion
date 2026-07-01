@@ -54,6 +54,12 @@ export default function MatchScoreManager({
   const [courts, setCourts] = useState<string[]>(['Court 1', 'Court 2', 'Court 3', 'Court 4', 'Court 5', 'Court 6']);
   const [tournament, setTournament] = useState<any | null>(null);
 
+  // Hierarchy tracking states for L2 Data
+  const [roots, setRoots] = useState<any[]>([]);
+  const [allRootsLevel1, setAllRootsLevel1] = useState<any[]>([]);
+  const [allRootsLevel2, setAllRootsLevel2] = useState<any[]>([]);
+  const [allRootsPlayers, setAllRootsPlayers] = useState<any[]>([]);
+
   // Set-by-set & Court interactive state
   const [currentSetIndex, setCurrentSetIndex] = useState<number>(1);
   const [servingPlayer, setServingPlayer] = useState<'player1' | 'player2' | null>(null);
@@ -137,6 +143,88 @@ export default function MatchScoreManager({
       unsubscribeTournament();
     };
   }, [tournamentId]);
+
+  // Fetch roots, level1s, level2s, and players assignments for L2 Data
+  useEffect(() => {
+    if (!tournamentId) return;
+    const qRoots = query(collection(db, `tournaments/${tournamentId}/roots`));
+    const unsubscribeRoots = onSnapshot(qRoots, (snapshot) => {
+      setRoots(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, (e) => console.error("Error fetching roots in MatchScoreManager:", e));
+    return () => unsubscribeRoots();
+  }, [tournamentId]);
+
+  useEffect(() => {
+    if (roots.length === 0 || !tournamentId) {
+      setAllRootsLevel1([]);
+      return;
+    }
+    const unsubscribes = roots.map(root => {
+      const q = query(collection(db, `tournaments/${tournamentId}/roots/${root.id}/level1`));
+      return onSnapshot(q, (snapshot) => {
+        setAllRootsLevel1(prev => {
+          const filtered = prev.filter(item => item.rootId !== root.id);
+          const newItems = snapshot.docs.map(doc => ({ id: doc.id, rootId: root.id, rootName: root.name, ...doc.data() }));
+          return [...filtered, ...newItems];
+        });
+      }, (err) => console.error("Error fetching level1s in MatchScoreManager:", err));
+    });
+    return () => unsubscribes.forEach(unsub => unsub());
+  }, [roots, tournamentId]);
+
+  useEffect(() => {
+    if (allRootsLevel1.length === 0 || !tournamentId) {
+      setAllRootsLevel2([]);
+      return;
+    }
+    const unsubscribes = allRootsLevel1.map(l1 => {
+      const q = query(collection(db, `tournaments/${tournamentId}/roots/${l1.rootId}/level1/${l1.id}/level2`));
+      return onSnapshot(q, (snapshot) => {
+        setAllRootsLevel2(prev => {
+          const filtered = prev.filter(item => item.level1Id !== l1.id);
+          const newItems = snapshot.docs.map(doc => ({ 
+            id: doc.id, 
+            level1Id: l1.id, 
+            level1Name: l1.name,
+            rootId: l1.rootId, 
+            rootName: l1.rootName,
+            ...doc.data() 
+          }));
+          return [...filtered, ...newItems];
+        });
+      }, (err) => console.error("Error fetching level2s in MatchScoreManager:", err));
+    });
+    return () => unsubscribes.forEach(unsub => unsub());
+  }, [allRootsLevel1, tournamentId]);
+
+  useEffect(() => {
+    if (allRootsLevel2.length === 0 || !tournamentId) {
+      setAllRootsPlayers([]);
+      return;
+    }
+    const unsubscribes = allRootsLevel2.map(l2 => {
+      const q = query(collection(db, `tournaments/${tournamentId}/roots/${l2.rootId}/level1/${l2.level1Id}/level2/${l2.id}/players`));
+      return onSnapshot(q, (snapshot) => {
+        setAllRootsPlayers(prev => {
+          const filtered = prev.filter(item => item.level2Id !== l2.id);
+          const newItems = snapshot.docs.map(doc => ({ 
+            id: doc.id, 
+            level2Id: l2.id, 
+            level2Name: l2.name,
+            level1Id: l2.level1Id, 
+            level1Name: l2.level1Name,
+            rootId: l2.rootId, 
+            rootName: l2.rootName,
+            ...doc.data() 
+          }));
+          return [...filtered, ...newItems];
+        });
+      }, (err) => console.error("Error fetching assigned players in MatchScoreManager:", err));
+    });
+    return () => unsubscribes.forEach(unsub => unsub());
+  }, [allRootsLevel2, tournamentId]);
+
+  const playerL2Map = Object.fromEntries(allRootsPlayers.map(ap => [ap.id, ap.level2Name]));
 
   // Helper to check if a set is completed by professional rules
   const isSetFinished = (p1: number, p2: number, pointsTarget: number) => {
@@ -616,7 +704,7 @@ export default function MatchScoreManager({
                 return (
                   <div 
                     key={f.id} 
-                    className={`bg-white border border-slate-150/80 rounded-2xl shadow-xs hover:shadow-md hover:border-slate-300 transition-all p-3.5 flex flex-col justify-between h-[185px] border-l-4 ${statusAccent}`}
+                    className={`bg-white border border-slate-150/80 rounded-2xl shadow-xs hover:shadow-md hover:border-slate-300 transition-all p-3.5 flex flex-col justify-between min-h-[195px] h-auto border-l-4 ${statusAccent}`}
                   >
                     {/* Card Top: Match Info */}
                     <div className="flex justify-between items-start gap-1.5">
@@ -651,15 +739,22 @@ export default function MatchScoreManager({
                     </div>
 
                     {/* Card Middle: Matchup and Score Presentation */}
-                    <div className="space-y-2 py-1 flex-grow flex flex-col justify-center">
+                    <div className="space-y-2.5 py-1.5 flex-grow flex flex-col justify-center">
                       {/* Player 1 Row */}
-                      <div className="flex justify-between items-center gap-2">
-                        <span className={`text-xs font-black truncate max-w-[140px] ${status === 'completed' && matchResult?.winner === 'player2' ? 'text-slate-400 font-normal line-through' : 'text-slate-800'}`} title={f.player1Name}>
-                          {f.player1Name}
-                        </span>
+                      <div className="flex justify-between items-start gap-2">
+                        <div className="flex flex-col min-w-0 flex-1">
+                          <span className={`text-xs font-black truncate max-w-[140px] ${status === 'completed' && matchResult?.winner === 'player2' ? 'text-slate-400 font-normal line-through' : 'text-slate-800'}`} title={f.player1Name}>
+                            {f.player1Name}
+                          </span>
+                          {playerL2Map[f.player1Id] && (
+                            <span className="text-[9px] text-indigo-600/90 font-semibold truncate mt-0.5 bg-indigo-50/50 px-1 py-0.25 rounded self-start" title={`L2: ${playerL2Map[f.player1Id]}`}>
+                              L2: {playerL2Map[f.player1Id]}
+                            </span>
+                          )}
+                        </div>
                         {/* Scores displays */}
                         {(status === 'live' || status === 'completed') && (
-                          <div className="flex gap-1 shrink-0">
+                          <div className="flex gap-1 shrink-0 mt-0.5">
                             <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${currentScores.p1g1 > currentScores.p2g1 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{currentScores.p1g1}</span>
                             <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${currentScores.p1g2 > currentScores.p2g2 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{currentScores.p1g2}</span>
                             {(currentScores.p1g3 > 0 || currentScores.p2g3 > 0) && (
@@ -685,13 +780,20 @@ export default function MatchScoreManager({
                       )}
 
                       {/* Player 2 Row */}
-                      <div className="flex justify-between items-center gap-2">
-                        <span className={`text-xs font-black truncate max-w-[140px] ${status === 'completed' && matchResult?.winner === 'player1' ? 'text-slate-400 font-normal line-through' : 'text-slate-800'}`} title={f.player2Name}>
-                          {f.player2Name}
-                        </span>
+                      <div className="flex justify-between items-start gap-2">
+                        <div className="flex flex-col min-w-0 flex-1">
+                          <span className={`text-xs font-black truncate max-w-[140px] ${status === 'completed' && matchResult?.winner === 'player1' ? 'text-slate-400 font-normal line-through' : 'text-slate-800'}`} title={f.player2Name}>
+                            {f.player2Name}
+                          </span>
+                          {playerL2Map[f.player2Id] && (
+                            <span className="text-[9px] text-indigo-600/90 font-semibold truncate mt-0.5 bg-indigo-50/50 px-1 py-0.25 rounded self-start" title={`L2: ${playerL2Map[f.player2Id]}`}>
+                              L2: {playerL2Map[f.player2Id]}
+                            </span>
+                          )}
+                        </div>
                         {/* Scores displays */}
                         {(status === 'live' || status === 'completed') && (
-                          <div className="flex gap-1 shrink-0">
+                          <div className="flex gap-1 shrink-0 mt-0.5">
                             <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${currentScores.p2g1 > currentScores.p1g1 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{currentScores.p2g1}</span>
                             <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${currentScores.p2g2 > currentScores.p1g2 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{currentScores.p2g2}</span>
                             {(currentScores.p1g3 > 0 || currentScores.p2g3 > 0) && (

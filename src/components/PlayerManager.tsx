@@ -33,8 +33,10 @@ import {
   Check,
   AlertTriangle,
   RefreshCw,
-  FileText
+  FileText,
+  Trophy
 } from 'lucide-react';
+import PlayerMatchesModal from './PlayerMatchesModal';
 
 export default function PlayerManager({ 
   tournamentId,
@@ -45,6 +47,7 @@ export default function PlayerManager({
 }) {
   const isAdmin = userRole === 'admin';
   const [players, setPlayers] = useState<any[]>([]);
+  const [selectedPlayerForMatches, setSelectedPlayerForMatches] = useState<{ id: string; name: string } | null>(null);
   const [player, setPlayer] = useState({ name: '', age: '', mobile: '' });
   const [selectedChapterId, setSelectedChapterId] = useState<string>('');
   const [selectedGroupId, setSelectedGroupId] = useState<string>('');
@@ -1555,7 +1558,13 @@ export default function PlayerManager({
                           </div>
 
                           <div className="space-y-0.5">
-                            <h4 className="font-bold text-slate-800 text-base tracking-tight">{p.name}</h4>
+                            <h4 
+                              onClick={() => setSelectedPlayerForMatches({ id: p.id, name: p.name })}
+                              className="font-bold text-slate-800 text-base tracking-tight cursor-pointer hover:text-indigo-600 hover:underline decoration-indigo-200 transition-colors"
+                              title="Click to view all matches for this player"
+                            >
+                              {p.name}
+                            </h4>
                             <div className="flex flex-wrap items-center gap-2 text-slate-500 text-xs font-medium">
                               {p.mobile && (
                                 <span className="flex items-center gap-1 px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded text-[10px] font-bold border border-indigo-100/60">
@@ -1577,24 +1586,34 @@ export default function PlayerManager({
                         </div>
 
                         {/* Top corner actions */}
-                        {isAdmin && (
-                          <div className="flex items-center gap-1.5">
-                            <button 
-                              onClick={() => startEdit(p)}
-                              className="p-1.5 bg-slate-50 hover:bg-indigo-50 text-slate-500 hover:text-indigo-600 rounded-lg transition-colors"
-                              title="Edit player details"
-                            >
-                              <Edit3 className="w-4 h-4" />
-                            </button>
-                            <button 
-                              onClick={() => setPlayerToDelete(p)}
-                              className="p-1.5 bg-slate-50 hover:bg-rose-50 text-slate-500 hover:text-rose-600 rounded-lg transition-colors"
-                              title="Delete Player"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        )}
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button 
+                            onClick={() => setSelectedPlayerForMatches({ id: p.id, name: p.name })}
+                            className="p-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl transition-colors flex items-center gap-1 text-[10px] font-black px-2.5 py-1.5 border border-indigo-100 shadow-2xs"
+                            title="View player match history"
+                          >
+                            <Trophy className="w-3.5 h-3.5" />
+                            <span className="hidden sm:inline">Matches</span>
+                          </button>
+                          {isAdmin && (
+                            <>
+                              <button 
+                                onClick={() => startEdit(p)}
+                                className="p-1.5 bg-slate-50 hover:bg-indigo-50 text-slate-500 hover:text-indigo-600 rounded-lg transition-colors"
+                                title="Edit player details"
+                              >
+                                <Edit3 className="w-4 h-4" />
+                              </button>
+                              <button 
+                                onClick={() => setPlayerToDelete(p)}
+                                className="p-1.5 bg-slate-50 hover:bg-rose-50 text-slate-500 hover:text-rose-600 rounded-lg transition-colors"
+                                title="Delete Player"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </div>
 
                       {/* Assignment Status Badge Footer */}
@@ -1667,6 +1686,20 @@ export default function PlayerManager({
               </div>
             </motion.div>
           </div>
+        )}
+      </AnimatePresence>
+
+      {/* Player Match History Modal */}
+      <AnimatePresence>
+        {selectedPlayerForMatches && (
+          <PlayerMatchesModal
+            playerId={selectedPlayerForMatches.id}
+            playerName={selectedPlayerForMatches.name}
+            tournamentId={tournamentId}
+            onClose={() => setSelectedPlayerForMatches(null)}
+            playerL1Map={Object.fromEntries(allRootsPlayers.map(ap => [ap.id, ap.level1Name]))}
+            playerL2Map={Object.fromEntries(allRootsPlayers.map(ap => [ap.id, ap.level2Name]))}
+          />
         )}
       </AnimatePresence>
     </div>

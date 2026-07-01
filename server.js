@@ -1,7 +1,6 @@
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { createServer as createViteServer } from 'vite';
 import fs from 'fs';
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, getDocs, doc, getDoc } from 'firebase/firestore';
@@ -13,14 +12,32 @@ const __dirname = path.dirname(__filename);
 const firebaseConfigPath = path.join(__dirname, 'firebase-applet-config.json');
 let db = null;
 
+// Built-in fallback config to ensure API works even if the config file is missing on Hostinger
+const DEFAULT_FIREBASE_CONFIG = {
+  projectId: "jbmrcricket",
+  appId: "1:289363783537:web:c529572a78b4369fef50d0",
+  apiKey: "AIzaSyDEeuHrw5Q5lu-rOYcTNMQbfQ-ejjUFam4",
+  authDomain: "jbmrcricket.firebaseapp.com",
+  firestoreDatabaseId: "ai-studio-28fe81ba-7106-49f6-bb9e-31bfd6aedf1a",
+  storageBucket: "jbmrcricket.firebasestorage.app",
+  messagingSenderId: "289363783537",
+  measurementId: ""
+};
+
 try {
+  let firebaseConfig = null;
   if (fs.existsSync(firebaseConfigPath)) {
-    const firebaseConfig = JSON.parse(fs.readFileSync(firebaseConfigPath, 'utf8'));
+    firebaseConfig = JSON.parse(fs.readFileSync(firebaseConfigPath, 'utf8'));
+    console.log('Firebase configuration loaded from firebase-applet-config.json');
+  } else {
+    console.warn('firebase-applet-config.json not found, using built-in fallback configuration.');
+    firebaseConfig = DEFAULT_FIREBASE_CONFIG;
+  }
+
+  if (firebaseConfig) {
     const firebaseApp = initializeApp(firebaseConfig);
     db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
     console.log('Firebase successfully initialized in server.js');
-  } else {
-    console.warn('firebase-applet-config.json not found in server.js initialization.');
   }
 } catch (error) {
   console.error('Failed to initialize Firebase in server.js:', error);
@@ -29,6 +46,18 @@ try {
 async function startServer() {
   const app = express();
   const PORT = process.env.PORT || 3000;
+
+  // Custom CORS middleware to allow stream setups / widgets (OBS) to fetch data
+  app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
+    res.setHeader('Access-Control-Allow-Headers', 'X-Requested-With,content-type,Authorization');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(200);
+    }
+    next();
+  });
 
   // Middleware
   app.use(express.json());
@@ -282,22 +311,36 @@ async function startServer() {
     }
   });
 
-  if (process.env.NODE_ENV !== 'production') {
-    // In development mode, use Vite's dev server middleware
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    // In production mode, serve the static files from the dist directory
+  function serveStaticProduction(appInstance) {
     const distPath = path.join(__dirname, 'dist');
-    app.use(express.static(distPath));
+    appInstance.use(express.static(distPath));
     
     // Fallback all other routes to index.html for SPA routing
-    app.get('*', (req, res) => {
+    appInstance.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
+  }
+
+  // Auto-detect production mode based on folder structure or environment variable
+  const isProduction = process.env.NODE_ENV === 'production' || fs.existsSync(path.join(__dirname, 'dist'));
+
+  if (!isProduction) {
+    try {
+      console.log('Starting server in DEVELOPMENT mode with Vite dev middleware...');
+      // Dynamic import to prevent crash in production environments where vite might not be available
+      const { createServer: createViteServer } = await import('vite');
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: 'spa',
+      });
+      app.use(vite.middlewares);
+    } catch (error) {
+      console.error('Failed to start Vite dev server, falling back to static production serving:', error);
+      serveStaticProduction(app);
+    }
+  } else {
+    console.log('Starting server in PRODUCTION mode (serving built dist/ folder)...');
+    serveStaticProduction(app);
   }
 
   app.listen(PORT, '0.0.0.0', () => {

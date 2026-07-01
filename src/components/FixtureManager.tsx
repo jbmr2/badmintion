@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { motion, AnimatePresence } from 'motion/react';
 import { 
   collection, 
   addDoc, 
@@ -30,7 +31,8 @@ import {
   HelpCircle,
   Filter,
   RefreshCw,
-  Award
+  Award,
+  Loader2
 } from 'lucide-react';
 
 export default function FixtureManager({ 
@@ -44,6 +46,7 @@ export default function FixtureManager({
 }) {
   const isAdmin = userRole === 'admin';
   const [fixtures, setFixtures] = useState<any[]>([]);
+  const [deletingIds, setDeletingIds] = useState<string[]>([]);
   const [players, setPlayers] = useState<any[]>([]);
   const [manualPlayer1, setManualPlayer1] = useState('');
   const [manualPlayer2, setManualPlayer2] = useState('');
@@ -52,9 +55,16 @@ export default function FixtureManager({
   const [matchType, setMatchType] = useState<'league' | 'pre_quarter' | 'quarter' | 'semi' | 'final'>('league');
   const [groups, setGroups] = useState<any[]>([]);
   const [editingFixture, setEditingFixture] = useState<any | null>(null);
+  const [fixtureToDelete, setFixtureToDelete] = useState<any | null>(null);
   const [manualCourt, setManualCourt] = useState('');
   const [courts, setCourts] = useState<string[]>(['Court 1', 'Court 2', 'Court 3', 'Court 4', 'Court 5', 'Court 6']);
   const [isGenerating, setIsGenerating] = useState(false);
+
+  // Hierarchy tracking states for L2 Data
+  const [roots, setRoots] = useState<any[]>([]);
+  const [allRootsLevel1, setAllRootsLevel1] = useState<any[]>([]);
+  const [allRootsLevel2, setAllRootsLevel2] = useState<any[]>([]);
+  const [allRootsPlayers, setAllRootsPlayers] = useState<any[]>([]);
 
   // Filter & Search states
   const [searchQuery, setSearchQuery] = useState('');
@@ -128,7 +138,88 @@ export default function FixtureManager({
     };
   }, [tournamentId]);
 
+  // Fetch roots, level1s, level2s, and players assignments for L2 Data
+  useEffect(() => {
+    if (!tournamentId) return;
+    const qRoots = query(collection(db, `tournaments/${tournamentId}/roots`));
+    const unsubscribeRoots = onSnapshot(qRoots, (snapshot) => {
+      setRoots(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, (e) => console.error("Error fetching roots in FixtureManager:", e));
+    return () => unsubscribeRoots();
+  }, [tournamentId]);
+
+  useEffect(() => {
+    if (roots.length === 0 || !tournamentId) {
+      setAllRootsLevel1([]);
+      return;
+    }
+    const unsubscribes = roots.map(root => {
+      const q = query(collection(db, `tournaments/${tournamentId}/roots/${root.id}/level1`));
+      return onSnapshot(q, (snapshot) => {
+        setAllRootsLevel1(prev => {
+          const filtered = prev.filter(item => item.rootId !== root.id);
+          const newItems = snapshot.docs.map(doc => ({ id: doc.id, rootId: root.id, rootName: root.name, ...doc.data() }));
+          return [...filtered, ...newItems];
+        });
+      }, (err) => console.error("Error fetching level1s in FixtureManager:", err));
+    });
+    return () => unsubscribes.forEach(unsub => unsub());
+  }, [roots, tournamentId]);
+
+  useEffect(() => {
+    if (allRootsLevel1.length === 0 || !tournamentId) {
+      setAllRootsLevel2([]);
+      return;
+    }
+    const unsubscribes = allRootsLevel1.map(l1 => {
+      const q = query(collection(db, `tournaments/${tournamentId}/roots/${l1.rootId}/level1/${l1.id}/level2`));
+      return onSnapshot(q, (snapshot) => {
+        setAllRootsLevel2(prev => {
+          const filtered = prev.filter(item => item.level1Id !== l1.id);
+          const newItems = snapshot.docs.map(doc => ({ 
+            id: doc.id, 
+            level1Id: l1.id, 
+            level1Name: l1.name,
+            rootId: l1.rootId, 
+            rootName: l1.rootName,
+            ...doc.data() 
+          }));
+          return [...filtered, ...newItems];
+        });
+      }, (err) => console.error("Error fetching level2s in FixtureManager:", err));
+    });
+    return () => unsubscribes.forEach(unsub => unsub());
+  }, [allRootsLevel1, tournamentId]);
+
+  useEffect(() => {
+    if (allRootsLevel2.length === 0 || !tournamentId) {
+      setAllRootsPlayers([]);
+      return;
+    }
+    const unsubscribes = allRootsLevel2.map(l2 => {
+      const q = query(collection(db, `tournaments/${tournamentId}/roots/${l2.rootId}/level1/${l2.level1Id}/level2/${l2.id}/players`));
+      return onSnapshot(q, (snapshot) => {
+        setAllRootsPlayers(prev => {
+          const filtered = prev.filter(item => item.level2Id !== l2.id);
+          const newItems = snapshot.docs.map(doc => ({ 
+            id: doc.id, 
+            level2Id: l2.id, 
+            level2Name: l2.name,
+            level1Id: l2.level1Id, 
+            level1Name: l2.level1Name,
+            rootId: l2.rootId, 
+            rootName: l2.rootName,
+            ...doc.data() 
+          }));
+          return [...filtered, ...newItems];
+        });
+      }, (err) => console.error("Error fetching assigned players in FixtureManager:", err));
+    });
+    return () => unsubscribes.forEach(unsub => unsub());
+  }, [allRootsLevel2, tournamentId]);
+
   const playerMap = Object.fromEntries(players.map(p => [p.id, p.name]));
+  const playerL2Map = Object.fromEntries(allRootsPlayers.map(ap => [ap.id, ap.level2Name]));
 
   const generateShortId = () => Math.random().toString(36).substring(2, 6);
 
@@ -161,19 +252,33 @@ export default function FixtureManager({
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!window.confirm("Are you sure you want to delete this match? This will also remove any score recorded for it.")) return;
-    await deleteDoc(doc(db, `tournaments/${tournamentId}/fixtures`, id));
-    
-    // Delete associated match result if it exists
-    const matchesQuery = query(collection(db, `tournaments/${tournamentId}/matches`), where('fixtureId', '==', id));
-    const querySnapshot = await getDocs(matchesQuery);
-    
-    const batch = writeBatch(db);
-    querySnapshot.forEach((doc) => {
-        batch.delete(doc.ref);
-    });
-    await batch.commit();
+  const handleDelete = (fixture: any) => {
+    setFixtureToDelete(fixture);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!fixtureToDelete) return;
+    const id = fixtureToDelete.id;
+    setDeletingIds(prev => [...prev, id]);
+    setFixtureToDelete(null); // Close the confirmation modal immediately so the user can see the loading state on the card
+
+    try {
+      await deleteDoc(doc(db, `tournaments/${tournamentId}/fixtures`, id));
+      
+      // Delete associated match result if it exists
+      const matchesQuery = query(collection(db, `tournaments/${tournamentId}/matches`), where('fixtureId', '==', id));
+      const querySnapshot = await getDocs(matchesQuery);
+      
+      const batch = writeBatch(db);
+      querySnapshot.forEach((doc) => {
+          batch.delete(doc.ref);
+      });
+      await batch.commit();
+    } catch (e) {
+      console.error("Error deleting match:", e);
+      // Remove from deleting state on error
+      setDeletingIds(prev => prev.filter(x => x !== id));
+    }
   };
 
   const handleEdit = (fixture: any) => {
@@ -681,105 +786,133 @@ export default function FixtureManager({
 
                 {/* HORIZONTAL MATCHES GRID ("same left to right small box for each match") */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                  {groupMatches.map((f, idx) => {
-                    // Accent border/ring according to status
-                    let statusAccent = 'border-l-slate-300';
-                    let statusBg = 'bg-slate-50 text-slate-600';
-                    if (f.status === 'completed') {
-                      statusAccent = 'border-l-emerald-500 ring-emerald-500/10';
-                      statusBg = 'bg-emerald-50 text-emerald-700';
-                    } else if (f.status === 'live') {
-                      statusAccent = 'border-l-indigo-500 ring-indigo-500/10 shadow-indigo-100/60 shadow-md animate-pulse';
-                      statusBg = 'bg-indigo-50 text-indigo-700';
-                    } else if (f.status === 'pending') {
-                      statusAccent = 'border-l-amber-400 ring-amber-400/10';
-                      statusBg = 'bg-amber-50 text-amber-700';
-                    }
+                  <AnimatePresence mode="popLayout">
+                    {groupMatches.map((f, idx) => {
+                      const isDeleting = deletingIds.includes(f.id);
+                      // Accent border/ring according to status
+                      let statusAccent = 'border-l-slate-300';
+                      let statusBg = 'bg-slate-50 text-slate-600';
+                      if (f.status === 'completed') {
+                        statusAccent = 'border-l-emerald-500 ring-emerald-500/10';
+                        statusBg = 'bg-emerald-50 text-emerald-700';
+                      } else if (f.status === 'live') {
+                        statusAccent = 'border-l-indigo-500 ring-indigo-500/10 shadow-indigo-100/60 shadow-md animate-pulse';
+                        statusBg = 'bg-indigo-50 text-indigo-700';
+                      } else if (f.status === 'pending') {
+                        statusAccent = 'border-l-amber-400 ring-amber-400/10';
+                        statusBg = 'bg-amber-50 text-amber-700';
+                      }
 
-                    return (
-                      <div 
-                        key={f.id} 
-                        className={`bg-white border border-slate-150/80 rounded-2xl shadow-xs hover:shadow-md hover:border-slate-300 transition-all p-3.5 flex flex-col justify-between h-[175px] border-l-4 ${statusAccent}`}
-                      >
-                        {/* Match Card Top */}
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-mono text-[9px] font-black text-slate-400 tracking-wider bg-slate-50 border border-slate-200 px-1.5 py-0.5 rounded uppercase">
-                            #{f.matchId?.toUpperCase() || 'PND'}
-                          </span>
-
-                          <div className="flex items-center gap-1">
-                            <span className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded uppercase tracking-wider ${getMatchTypeBadgeClass(f.matchType)}`}>
-                              {getMatchTypeLabel(f.matchType)}
-                            </span>
-                            <span className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded uppercase tracking-wider ${statusBg}`}>
-                              {f.status || 'pending'}
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Match Card Versus Section (Split columns) */}
-                        <div className="flex flex-col justify-center space-y-1.5 my-2 flex-grow">
-                          <div className="flex items-center justify-between text-xs">
-                            <span className="font-black text-slate-800 truncate max-w-[130px]" title={f.player1Name}>
-                              {f.player1Name}
-                            </span>
-                            <span className="text-[9px] text-slate-400 uppercase tracking-widest font-extrabold">P1</span>
-                          </div>
-
-                          <div className="relative flex items-center justify-center py-0.5">
-                            <div className="absolute inset-0 flex items-center">
-                              <div className="w-full border-t border-slate-100/90"></div>
-                            </div>
-                            <span className="relative px-2 bg-white text-[9px] font-black text-indigo-500 bg-indigo-50 rounded-full border border-indigo-100/75 tracking-wider">
-                              VS
-                            </span>
-                          </div>
-
-                          <div className="flex items-center justify-between text-xs">
-                            <span className="font-black text-slate-800 truncate max-w-[130px]" title={f.player2Name}>
-                              {f.player2Name}
-                            </span>
-                            <span className="text-[9px] text-slate-400 uppercase tracking-widest font-extrabold">P2</span>
-                          </div>
-                        </div>
-
-                        {/* Match Card Bottom */}
-                        <div className="flex items-center justify-between border-t border-slate-50 pt-2 text-[10px] text-slate-500">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="font-bold flex items-center gap-0.5 text-slate-500">
-                              🎯 {f.pointsTarget || '15'} pts
-                            </span>
-                            {f.court && (
-                              <span className="font-black text-amber-700 bg-amber-50 px-1 rounded flex items-center gap-0.5 text-[9px]">
-                                <MapPin className="w-2.5 h-2.5 shrink-0" />
-                                {f.court}
-                              </span>
-                            )}
-                          </div>
-
-                          {/* Quick Action Buttons */}
-                          {isAdmin && (
-                            <div className="flex items-center gap-1 bg-slate-50 p-0.5 rounded-lg border border-slate-100 shrink-0">
-                              <button 
-                                onClick={() => handleEdit(f)} 
-                                title="Edit Match"
-                                className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-white rounded transition"
-                              >
-                                <Edit3 className="w-3 h-3" />
-                              </button>
-                              <button 
-                                onClick={() => handleDelete(f.id)} 
-                                title="Delete Match"
-                                className="p-1 text-slate-400 hover:text-rose-600 hover:bg-white rounded transition"
-                              >
-                                <Trash2 className="w-3 h-3" />
-                              </button>
+                      return (
+                        <motion.div 
+                          key={f.id} 
+                          layout
+                          initial={{ opacity: 0, scale: 0.95 }}
+                          animate={{ opacity: isDeleting ? 0.45 : 1, scale: 1 }}
+                          exit={{ opacity: 0, scale: 0.9, y: 12, transition: { duration: 0.2 } }}
+                          className={`relative overflow-hidden bg-white border border-slate-150/80 rounded-2xl shadow-xs hover:shadow-md hover:border-slate-300 transition-all p-3.5 flex flex-col justify-between min-h-[185px] h-auto border-l-4 ${statusAccent} ${isDeleting ? 'pointer-events-none select-none' : ''}`}
+                        >
+                          {isDeleting && (
+                            <div className="absolute inset-0 bg-slate-50/55 backdrop-blur-[1px] flex flex-col items-center justify-center gap-1.5 z-10">
+                              <Loader2 className="w-5 h-5 text-indigo-600 animate-spin" />
+                              <span className="text-[10px] font-black text-indigo-600 uppercase tracking-wider">Deleting...</span>
                             </div>
                           )}
-                        </div>
-                      </div>
-                    );
-                  })}
+
+                          {/* Match Card Top */}
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-mono text-[9px] font-black text-slate-400 tracking-wider bg-slate-50 border border-slate-200 px-1.5 py-0.5 rounded uppercase">
+                              #{f.matchId?.toUpperCase() || 'PND'}
+                            </span>
+
+                            <div className="flex items-center gap-1">
+                              <span className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded uppercase tracking-wider ${getMatchTypeBadgeClass(f.matchType)}`}>
+                                {getMatchTypeLabel(f.matchType)}
+                              </span>
+                              <span className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded uppercase tracking-wider ${statusBg}`}>
+                                {f.status || 'pending'}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Match Card Versus Section (Split columns) */}
+                          <div className="flex flex-col justify-center space-y-2.5 my-2.5 flex-grow">
+                            <div className="flex items-start justify-between text-xs gap-2">
+                              <div className="flex flex-col min-w-0">
+                                <span className="font-black text-slate-800 truncate max-w-[130px]" title={f.player1Name}>
+                                  {f.player1Name}
+                                </span>
+                                {playerL2Map[f.player1Id] && (
+                                  <span className="text-[9px] text-indigo-600/90 font-semibold truncate mt-0.5 bg-indigo-50/50 px-1 py-0.25 rounded" title={`L2: ${playerL2Map[f.player1Id]}`}>
+                                    L2: {playerL2Map[f.player1Id]}
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-[9px] text-slate-400 uppercase tracking-widest font-extrabold shrink-0 mt-0.5">P1</span>
+                            </div>
+
+                            <div className="relative flex items-center justify-center py-0.5">
+                              <div className="absolute inset-0 flex items-center">
+                                <div className="w-full border-t border-slate-100/90"></div>
+                              </div>
+                              <span className="relative px-2 bg-white text-[9px] font-black text-indigo-500 bg-indigo-50 rounded-full border border-indigo-100/75 tracking-wider">
+                                VS
+                              </span>
+                            </div>
+
+                            <div className="flex items-start justify-between text-xs gap-2">
+                              <div className="flex flex-col min-w-0">
+                                <span className="font-black text-slate-800 truncate max-w-[130px]" title={f.player2Name}>
+                                  {f.player2Name}
+                                </span>
+                                {playerL2Map[f.player2Id] && (
+                                  <span className="text-[9px] text-indigo-600/90 font-semibold truncate mt-0.5 bg-indigo-50/50 px-1 py-0.25 rounded" title={`L2: ${playerL2Map[f.player2Id]}`}>
+                                    L2: {playerL2Map[f.player2Id]}
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-[9px] text-slate-400 uppercase tracking-widest font-extrabold shrink-0 mt-0.5">P2</span>
+                            </div>
+                          </div>
+
+                          {/* Match Card Bottom */}
+                          <div className="flex items-center justify-between border-t border-slate-50 pt-2 text-[10px] text-slate-500">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-bold flex items-center gap-0.5 text-slate-500">
+                                🎯 {f.pointsTarget || '15'} pts
+                              </span>
+                              {f.court && (
+                                <span className="font-black text-amber-700 bg-amber-50 px-1 rounded flex items-center gap-0.5 text-[9px]">
+                                  <MapPin className="w-2.5 h-2.5 shrink-0" />
+                                  {f.court}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Quick Action Buttons */}
+                            {isAdmin && (
+                              <div className="flex items-center gap-1 bg-slate-50 p-0.5 rounded-lg border border-slate-100 shrink-0">
+                                <button 
+                                  onClick={() => handleEdit(f)} 
+                                  title="Edit Match"
+                                  className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-white rounded transition"
+                                >
+                                  <Edit3 className="w-3 h-3" />
+                                </button>
+                                <button 
+                                  onClick={() => handleDelete(f)} 
+                                  title="Delete Match"
+                                  className="p-1 text-slate-400 hover:text-rose-600 hover:bg-white rounded transition"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </motion.div>
+                      );
+                    })}
+                  </AnimatePresence>
                 </div>
               </div>
             );
@@ -800,6 +933,53 @@ export default function FixtureManager({
           </button>
         </div>
       )}
+
+      {/* Custom Confirmation Modal for Fixture Deletion */}
+      <AnimatePresence>
+        {fixtureToDelete && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            {/* Backdrop */}
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setFixtureToDelete(null)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+            />
+            {/* Modal Box */}
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0, y: 10 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 10 }}
+              className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl relative z-10 border border-slate-100"
+            >
+              <div className="flex items-center gap-3 text-rose-600 mb-3.5">
+                <div className="p-2 bg-rose-50 rounded-xl">
+                  <Trash2 className="w-6 h-6" />
+                </div>
+                <h3 className="text-lg font-black text-slate-900">Delete Match Fixture?</h3>
+              </div>
+              <p className="text-sm text-slate-500 mb-6 leading-relaxed">
+                Are you sure you want to delete this match between <strong className="text-slate-800 font-bold">{fixtureToDelete.player1Name}</strong> and <strong className="text-slate-800 font-bold">{fixtureToDelete.player2Name}</strong>? This will also remove any score recorded for it and cannot be undone.
+              </p>
+              <div className="flex gap-3 justify-end">
+                <button 
+                  onClick={() => setFixtureToDelete(null)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold rounded-xl transition"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={handleConfirmDelete}
+                  className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-xl transition"
+                >
+                  Delete Match
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

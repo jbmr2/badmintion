@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, query, onSnapshot, doc, deleteDoc } from 'firebase/firestore';
-import { Pencil, Trash2, AlertTriangle } from 'lucide-react';
+import { Pencil, Trash2, AlertTriangle, QrCode } from 'lucide-react';
+import TournamentQRCodeModal from './TournamentQRCodeModal';
 
 export default function TournamentList({ 
   onCreateTournament, 
@@ -18,6 +19,7 @@ export default function TournamentList({
 }) {
   const [tournaments, setTournaments] = useState<any[]>([]);
   const [tournamentToDelete, setTournamentToDelete] = useState<any | null>(null);
+  const [qrCodeTournament, setQrCodeTournament] = useState<any | null>(null);
 
   useEffect(() => {
     const q = query(collection(db, 'tournaments'));
@@ -95,30 +97,42 @@ export default function TournamentList({
                   </p>
                 )}
               </div>
-              {isAdmin && (
-                <div className="flex items-center gap-2 mt-2 sm:mt-0 self-end sm:self-center">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onEditTournament(t.id);
-                    }}
-                    className="p-2.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition cursor-pointer border border-slate-100 bg-slate-50/50 hover:scale-105"
-                    title="Edit Tournament Settings"
-                  >
-                    <Pencil className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setTournamentToDelete(t);
-                    }}
-                    className="p-2.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition cursor-pointer border border-slate-100 bg-slate-50/50 hover:scale-105"
-                    title="Delete Tournament"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              )}
+              <div className="flex items-center gap-2 mt-2 sm:mt-0 self-end sm:self-center">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setQrCodeTournament(t);
+                  }}
+                  className="p-2.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition cursor-pointer border border-slate-100 bg-slate-50/50 hover:scale-105"
+                  title="Generate/View Share QR Code"
+                >
+                  <QrCode className="w-4 h-4" />
+                </button>
+                {isAdmin && (
+                  <>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onEditTournament(t.id);
+                      }}
+                      className="p-2.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition cursor-pointer border border-slate-100 bg-slate-50/50 hover:scale-105"
+                      title="Edit Tournament Settings"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setTournamentToDelete(t);
+                      }}
+                      className="p-2.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition cursor-pointer border border-slate-100 bg-slate-50/50 hover:scale-105"
+                      title="Delete Tournament"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -162,6 +176,14 @@ export default function TournamentList({
             </div>
           </div>
         </div>
+      )}
+
+      {qrCodeTournament && (
+        <TournamentQRCodeModal 
+          tournamentId={qrCodeTournament.id} 
+          tournamentName={qrCodeTournament.name} 
+          onClose={() => setQrCodeTournament(null)} 
+        />
       )}
     </div>
   );

@@ -18,6 +18,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import PlayerMatchesModal from './PlayerMatchesModal';
 
 interface StandingPlayer {
   playerId: string;
@@ -34,7 +35,14 @@ interface StandingPlayer {
   pointDiff: number;
 }
 
-export default function PointsTable({ tournamentId }: { tournamentId: string }) {
+export default function PointsTable({ 
+  tournamentId, 
+  userRole = 'user' 
+}: { 
+  tournamentId: string; 
+  userRole?: 'admin' | 'scorer' | 'user'; 
+}) {
+  const canEdit = userRole === 'admin' || userRole === 'scorer';
   const [matches, setMatches] = useState<any[]>([]);
   const [fixtures, setFixtures] = useState<any[]>([]);
   const [groups, setGroups] = useState<any[]>([]);
@@ -43,12 +51,116 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
   const [generating, setGenerating] = useState(false);
   const [activeTab, setActiveTab] = useState<'standings' | 'brackets' | 'schedule'>('standings');
   const [fixtureToDelete, setFixtureToDelete] = useState<any | null>(null);
+  const [selectedPlayerForMatches, setSelectedPlayerForMatches] = useState<{ id: string; name: string } | null>(null);
+
+  const safeConfirm = (msg: string): boolean => {
+    try {
+      return window.confirm(msg);
+    } catch (e) {
+      console.warn("window.confirm was blocked, auto-confirming:", e);
+      return true;
+    }
+  };
+
+  const alert = (msg: string) => {
+    try {
+      window.alert(msg);
+    } catch (e) {
+      console.warn("window.alert was blocked:", e);
+    }
+  };
+
+  // Hierarchy tracking states for L2 Data
+  const [roots, setRoots] = useState<any[]>([]);
+  const [allRootsLevel1, setAllRootsLevel1] = useState<any[]>([]);
+  const [allRootsLevel2, setAllRootsLevel2] = useState<any[]>([]);
+  const [allRootsPlayers, setAllRootsPlayers] = useState<any[]>([]);
 
   // Manual scheduling state
   const [selectedP1, setSelectedP1] = useState('');
   const [selectedP2, setSelectedP2] = useState('');
   const [selectedStage, setSelectedStage] = useState<'pre_quarter' | 'quarter' | 'semi' | 'final'>('quarter');
   const [pointsTarget, setPointsTarget] = useState('21');
+
+  // Fetch roots, level1s, level2s, and players assignments for L2 Data
+  useEffect(() => {
+    if (!tournamentId) return;
+    const qRoots = query(collection(db, `tournaments/${tournamentId}/roots`));
+    const unsubscribeRoots = onSnapshot(qRoots, (snapshot) => {
+      setRoots(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, (e) => console.error("Error fetching roots in PointsTable:", e));
+    return () => unsubscribeRoots();
+  }, [tournamentId]);
+
+  useEffect(() => {
+    if (roots.length === 0 || !tournamentId) {
+      setAllRootsLevel1([]);
+      return;
+    }
+    const unsubscribes = roots.map(root => {
+      const q = query(collection(db, `tournaments/${tournamentId}/roots/${root.id}/level1`));
+      return onSnapshot(q, (snapshot) => {
+        setAllRootsLevel1(prev => {
+          const filtered = prev.filter(item => item.rootId !== root.id);
+          const newItems = snapshot.docs.map(doc => ({ id: doc.id, rootId: root.id, rootName: root.name, ...doc.data() }));
+          return [...filtered, ...newItems];
+        });
+      }, (err) => console.error("Error fetching level1s in PointsTable:", err));
+    });
+    return () => unsubscribes.forEach(unsub => unsub());
+  }, [roots, tournamentId]);
+
+  useEffect(() => {
+    if (allRootsLevel1.length === 0 || !tournamentId) {
+      setAllRootsLevel2([]);
+      return;
+    }
+    const unsubscribes = allRootsLevel1.map(l1 => {
+      const q = query(collection(db, `tournaments/${tournamentId}/roots/${l1.rootId}/level1/${l1.id}/level2`));
+      return onSnapshot(q, (snapshot) => {
+        setAllRootsLevel2(prev => {
+          const filtered = prev.filter(item => item.level1Id !== l1.id);
+          const newItems = snapshot.docs.map(doc => ({ 
+            id: doc.id, 
+            level1Id: l1.id, 
+            level1Name: l1.name,
+            rootId: l1.rootId, 
+            rootName: l1.rootName,
+            ...doc.data() 
+          }));
+          return [...filtered, ...newItems];
+        });
+      }, (err) => console.error("Error fetching level2s in PointsTable:", err));
+    });
+    return () => unsubscribes.forEach(unsub => unsub());
+  }, [allRootsLevel1, tournamentId]);
+
+  useEffect(() => {
+    if (allRootsLevel2.length === 0 || !tournamentId) {
+      setAllRootsPlayers([]);
+      return;
+    }
+    const unsubscribes = allRootsLevel2.map(l2 => {
+      const q = query(collection(db, `tournaments/${tournamentId}/roots/${l2.rootId}/level1/${l2.level1Id}/level2/${l2.id}/players`));
+      return onSnapshot(q, (snapshot) => {
+        setAllRootsPlayers(prev => {
+          const filtered = prev.filter(item => item.level2Id !== l2.id);
+          const newItems = snapshot.docs.map(doc => ({ 
+            id: doc.id, 
+            level2Id: l2.id, 
+            level2Name: l2.name,
+            level1Id: l2.level1Id, 
+            level1Name: l2.level1Name,
+            rootId: l2.rootId, 
+            rootName: l2.rootName,
+            ...doc.data() 
+          }));
+          return [...filtered, ...newItems];
+        });
+      }, (err) => console.error("Error fetching assigned players in PointsTable:", err));
+    });
+    return () => unsubscribes.forEach(unsub => unsub());
+  }, [allRootsLevel2, tournamentId]);
 
   useEffect(() => {
     const qMatches = query(collection(db, `tournaments/${tournamentId}/matches`));
@@ -110,6 +222,8 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
   }, [tournamentId]);
 
   const playerMap = Object.fromEntries(players.map(p => [p.id, p.name]));
+  const playerL1Map = Object.fromEntries(allRootsPlayers.map(ap => [ap.id, ap.level1Name]));
+  const playerL2Map = Object.fromEntries(allRootsPlayers.map(ap => [ap.id, ap.level2Name]));
   const generateShortId = () => Math.random().toString(36).substring(2, 6);
 
   // Helper to check if a set is finished (badminton professional rules)
@@ -392,7 +506,7 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
 
         const completedPreQuarters = preQuarters.filter(q => q.status === 'completed');
         if (completedPreQuarters.length < preQuarters.length) {
-          if (!window.confirm(`Only ${completedPreQuarters.length} of ${preQuarters.length} Pre-Quarters are finished. Proceed using current winners?`)) {
+          if (!safeConfirm(`Only ${completedPreQuarters.length} of ${preQuarters.length} Pre-Quarters are finished. Proceed using current winners?`)) {
             setGenerating(false);
             return;
           }
@@ -512,7 +626,7 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
         // Find winners of completed Quarter Finals
         const completedQuarters = quarters.filter(q => q.status === 'completed');
         if (completedQuarters.length < quarters.length) {
-          if (!window.confirm(`Only ${completedQuarters.length} of ${quarters.length} Quarter Finals are finished. Proceed using current winners?`)) {
+          if (!safeConfirm(`Only ${completedQuarters.length} of ${quarters.length} Quarter Finals are finished. Proceed using current winners?`)) {
             setGenerating(false);
             return;
           }
@@ -624,7 +738,7 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
 
       const completedSemis = semis.filter(s => s.status === 'completed');
       if (completedSemis.length < semis.length && semis.length > 0) {
-        if (!window.confirm(`Only ${completedSemis.length} of ${semis.length} Semi-Final matches are finished. Seeding Final with current winners?`)) {
+        if (!safeConfirm(`Only ${completedSemis.length} of ${semis.length} Semi-Final matches are finished. Seeding Final with current winners?`)) {
           setGenerating(false);
           return;
         }
@@ -728,14 +842,16 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
               <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
             )}
           </button>
-          <button
-            onClick={() => setActiveTab('schedule')}
-            className={`px-4 py-2 text-xs font-extrabold rounded-xl transition ${
-              activeTab === 'schedule' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            ⚙️ Stage Planner
-          </button>
+          {canEdit && (
+            <button
+              onClick={() => setActiveTab('schedule')}
+              className={`px-4 py-2 text-xs font-extrabold rounded-xl transition ${
+                activeTab === 'schedule' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              ⚙️ Stage Planner
+            </button>
+          )}
         </div>
       </div>
 
@@ -811,13 +927,36 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
                               </td>
 
                               {/* Player Name */}
-                              <td className="p-3">
-                                <div className="flex items-center gap-1.5">
-                                  <span className="font-extrabold text-slate-800 text-sm">{p.playerName}</span>
-                                  {isPromoted && (
-                                    <span className="text-[8px] font-black text-emerald-700 bg-emerald-100/80 border border-emerald-200 px-1.5 py-0.5 rounded uppercase">
-                                      Qualified
+                              <td 
+                                className="p-3 cursor-pointer group/cell"
+                                onClick={() => setSelectedPlayerForMatches({ id: p.playerId, name: p.playerName })}
+                                title="Click to view all matches for this player"
+                              >
+                                <div className="flex flex-col gap-0.5">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-extrabold text-slate-800 text-sm group-hover/cell:text-indigo-600 transition-colors flex items-center gap-1">
+                                      {p.playerName}
+                                      <TrendingUp className="w-3.5 h-3.5 text-slate-300 group-hover/cell:text-indigo-500 transition-colors shrink-0" />
                                     </span>
+                                    {isPromoted && (
+                                      <span className="text-[8px] font-black text-emerald-700 bg-emerald-100/80 border border-emerald-200 px-1.5 py-0.5 rounded uppercase">
+                                        Qualified
+                                      </span>
+                                    )}
+                                  </div>
+                                  {(playerL1Map[p.playerId] || playerL2Map[p.playerId]) && (
+                                    <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                                      {playerL1Map[p.playerId] && (
+                                        <span className="text-[8px] font-bold text-slate-500 bg-slate-100 border border-slate-200/60 px-1.5 py-0.25 rounded uppercase tracking-wider">
+                                          {playerL1Map[p.playerId]}
+                                        </span>
+                                      )}
+                                      {playerL2Map[p.playerId] && (
+                                        <span className="text-[8px] font-black text-indigo-700 bg-indigo-50 border border-indigo-150 px-1.5 py-0.25 rounded uppercase tracking-wider">
+                                          L2: {playerL2Map[p.playerId]}
+                                        </span>
+                                      )}
+                                    </div>
                                   )}
                                 </div>
                               </td>
@@ -903,13 +1042,15 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
                           {/* Match Header info */}
                           <div className="flex justify-between items-center text-[9px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-1.5 mb-2.5">
                             <span>MATCH {idx + 1} ({f.pointsTarget || '15'} pts) {f.court ? `• ${f.court}` : ''}</span>
-                            <button 
-                              onClick={() => setFixtureToDelete(f)}
-                              className="text-slate-300 hover:text-rose-500 transition opacity-0 group-hover:opacity-100"
-                              title="Delete Fixture"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            {canEdit && (
+                              <button 
+                                onClick={() => setFixtureToDelete(f)}
+                                className="text-slate-400 hover:text-rose-600 transition p-1 hover:bg-rose-50 rounded-lg shrink-0"
+                                title="Delete Fixture"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
 
                           {/* Players row */}
@@ -969,13 +1110,15 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
                           {/* Match Header info */}
                           <div className="flex justify-between items-center text-[9px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-1.5 mb-2.5">
                             <span>MATCH {idx + 1} ({f.pointsTarget || '21'} pts) {f.court ? `• ${f.court}` : ''}</span>
-                            <button 
-                              onClick={() => setFixtureToDelete(f)}
-                              className="text-slate-300 hover:text-rose-500 transition opacity-0 group-hover:opacity-100"
-                              title="Delete Fixture"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            {canEdit && (
+                              <button 
+                                onClick={() => setFixtureToDelete(f)}
+                                className="text-slate-400 hover:text-rose-600 transition p-1 hover:bg-rose-50 rounded-lg shrink-0"
+                                title="Delete Fixture"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
 
                           {/* Players row */}
@@ -1035,13 +1178,15 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
                           {/* Match Header info */}
                           <div className="flex justify-between items-center text-[9px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-1.5 mb-2.5">
                             <span>SEMI FINAL {idx + 1} ({f.pointsTarget || '21'} pts) {f.court ? `• ${f.court}` : ''}</span>
-                            <button 
-                              onClick={() => setFixtureToDelete(f)}
-                              className="text-slate-300 hover:text-rose-500 transition opacity-0 group-hover:opacity-100"
-                              title="Delete Fixture"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            {canEdit && (
+                              <button 
+                                onClick={() => setFixtureToDelete(f)}
+                                className="text-slate-400 hover:text-rose-600 transition p-1 hover:bg-rose-50 rounded-lg shrink-0"
+                                title="Delete Fixture"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
 
                           {/* Players row */}
@@ -1105,13 +1250,15 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
                           {/* Match Header info */}
                           <div className="flex justify-between items-center text-[9px] font-black text-indigo-400 uppercase tracking-widest border-b border-indigo-900 pb-2 mb-3">
                             <span>CHAMPIONSHIP FINALS ({f.pointsTarget || '21'} pts) {f.court ? `• ${f.court}` : ''}</span>
-                            <button 
-                              onClick={() => setFixtureToDelete(f)}
-                              className="text-indigo-800 hover:text-rose-400 transition opacity-0 group-hover:opacity-100"
-                              title="Delete Fixture"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            {canEdit && (
+                              <button 
+                                onClick={() => setFixtureToDelete(f)}
+                                className="text-indigo-400 hover:text-rose-400 transition p-1 hover:bg-indigo-900 rounded-lg shrink-0"
+                                title="Delete Fixture"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
 
                           {/* Players row */}
@@ -1377,6 +1524,20 @@ export default function PointsTable({ tournamentId }: { tournamentId: string }) 
               </div>
             </motion.div>
           </div>
+        )}
+      </AnimatePresence>
+
+      {/* Player Match History Modal */}
+      <AnimatePresence>
+        {selectedPlayerForMatches && (
+          <PlayerMatchesModal
+            playerId={selectedPlayerForMatches.id}
+            playerName={selectedPlayerForMatches.name}
+            tournamentId={tournamentId}
+            onClose={() => setSelectedPlayerForMatches(null)}
+            playerL1Map={playerL1Map}
+            playerL2Map={playerL2Map}
+          />
         )}
       </AnimatePresence>
 

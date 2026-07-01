@@ -19,6 +19,7 @@ import RefereePanel from './components/RefereePanel';
 import GlobalPlayerRegistry from './components/GlobalPlayerRegistry';
 import RoleManager from './components/RoleManager';
 import APIPortal from './components/APIPortal';
+import PublicTournamentPortal from './components/PublicTournamentPortal';
 import { 
   Home, 
   Calendar, 
@@ -149,6 +150,25 @@ export default function App() {
 
   if (isObsMode && obsTournamentId && (obsFixtureId || obsCourt)) {
     return <OBSTicker tournamentId={obsTournamentId} fixtureId={obsFixtureId} court={obsCourt} />;
+  }
+
+  // Check for Public Live Standings / Fixtures mode
+  const isPublicMode = urlParams.get('view') === 'public';
+  const publicTournamentId = urlParams.get('tournamentId') || '';
+
+  if (isPublicMode && publicTournamentId) {
+    return (
+      <PublicTournamentPortal 
+        tournamentId={publicTournamentId} 
+        onBackToApp={user ? () => {
+          // If logged in, clear parameter and show dashboard
+          const cleanUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
+          window.history.pushState({ path: cleanUrl }, '', cleanUrl);
+          setTournamentId(publicTournamentId);
+          setStep('details');
+        } : undefined}
+      />
+    );
   }
 
   if (loading) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
@@ -414,18 +434,18 @@ export default function App() {
                   </div>
 
                   {/* Options List */}
-                  <div className="p-4 grid grid-cols-2 gap-3">
+                  <div className="p-4 grid grid-cols-2 gap-2.5">
                     <button
                       onClick={() => {
                         setStep('players');
                         setMobileMenuOpen(false);
                       }}
-                      className={`flex flex-col items-center gap-2 p-4 rounded-2xl border text-center transition-all ${
+                      className={`flex flex-col items-center justify-center gap-1.5 p-3 rounded-2xl border text-center transition-all min-h-[82px] ${
                         step === 'players' ? 'bg-indigo-50 border-indigo-200 text-indigo-700 font-extrabold' : 'bg-slate-50/60 border-slate-100 text-slate-700 font-bold hover:bg-slate-50'
                       }`}
                     >
-                      <Users className="w-5 h-5 text-indigo-500" />
-                      <span className="text-xs">Manage Players</span>
+                      <Users className="w-4 h-4 text-indigo-500 shrink-0" />
+                      <span className="text-[11px] leading-tight break-words whitespace-normal tracking-tight">Manage Players</span>
                     </button>
 
                     <button
@@ -433,12 +453,12 @@ export default function App() {
                         setStep('groups');
                         setMobileMenuOpen(false);
                       }}
-                      className={`flex flex-col items-center gap-2 p-4 rounded-2xl border text-center transition-all ${
+                      className={`flex flex-col items-center justify-center gap-1.5 p-3 rounded-2xl border text-center transition-all min-h-[82px] ${
                         step === 'groups' ? 'bg-indigo-50 border-indigo-200 text-indigo-700 font-extrabold' : 'bg-slate-50/60 border-slate-100 text-slate-700 font-bold hover:bg-slate-50'
                       }`}
                     >
-                      <Settings className="w-5 h-5 text-indigo-500" />
-                      <span className="text-xs">Manage Groups</span>
+                      <Settings className="w-4 h-4 text-indigo-500 shrink-0" />
+                      <span className="text-[11px] leading-tight break-words whitespace-normal tracking-tight">Manage Groups</span>
                     </button>
 
                     <button
@@ -446,12 +466,12 @@ export default function App() {
                         setStep('categories');
                         setMobileMenuOpen(false);
                       }}
-                      className={`flex flex-col items-center gap-2 p-4 rounded-2xl border text-center transition-all ${
+                      className={`flex flex-col items-center justify-center gap-1.5 p-3 rounded-2xl border text-center transition-all min-h-[82px] ${
                         step === 'categories' ? 'bg-indigo-50 border-indigo-200 text-indigo-700 font-extrabold' : 'bg-slate-50/60 border-slate-100 text-slate-700 font-bold hover:bg-slate-50'
                       }`}
                     >
-                      <Settings className="w-5 h-5 text-indigo-500" />
-                      <span className="text-xs">Categories</span>
+                      <Settings className="w-4 h-4 text-indigo-500 shrink-0" />
+                      <span className="text-[11px] leading-tight break-words whitespace-normal tracking-tight">Categories</span>
                     </button>
 
                     <button
@@ -459,12 +479,12 @@ export default function App() {
                         setStep('hierarchy');
                         setMobileMenuOpen(false);
                       }}
-                      className={`flex flex-col items-center gap-2 p-4 rounded-2xl border text-center transition-all ${
+                      className={`flex flex-col items-center justify-center gap-1.5 p-3 rounded-2xl border text-center transition-all min-h-[82px] ${
                         step === 'hierarchy' ? 'bg-indigo-50 border-indigo-200 text-indigo-700 font-extrabold' : 'bg-slate-50/60 border-slate-100 text-slate-700 font-bold hover:bg-slate-50'
                       }`}
                     >
-                      <Settings className="w-5 h-5 text-indigo-500" />
-                      <span className="text-xs">Master Hierarchy</span>
+                      <Settings className="w-4 h-4 text-indigo-500 shrink-0" />
+                      <span className="text-[11px] leading-tight break-words whitespace-normal tracking-tight">Master Hierarchy</span>
                     </button>
 
                     <button
@@ -472,12 +492,12 @@ export default function App() {
                         setStep('apis');
                         setMobileMenuOpen(false);
                       }}
-                      className={`flex flex-col items-center gap-2 p-4 rounded-2xl border text-center transition-all ${
+                      className={`flex flex-col items-center justify-center gap-1.5 p-3 rounded-2xl border text-center transition-all min-h-[82px] ${
                         step === 'apis' ? 'bg-indigo-50 border-indigo-200 text-indigo-700 font-extrabold' : 'bg-slate-50/60 border-slate-100 text-slate-700 font-bold hover:bg-slate-50'
                       }`}
                     >
-                      <Code className="w-5 h-5 text-indigo-500" />
-                      <span className="text-xs">API Links</span>
+                      <Code className="w-4 h-4 text-indigo-500 shrink-0" />
+                      <span className="text-[11px] leading-tight break-words whitespace-normal tracking-tight">API Links</span>
                     </button>
 
                     {userRole === 'admin' && (
@@ -486,12 +506,12 @@ export default function App() {
                           setStep('roles');
                           setMobileMenuOpen(false);
                         }}
-                        className={`flex flex-col items-center gap-2 p-4 rounded-2xl border text-center transition-all ${
+                        className={`flex flex-col items-center justify-center gap-1.5 p-3 rounded-2xl border text-center transition-all min-h-[82px] ${
                           step === 'roles' ? 'bg-indigo-50 border-indigo-200 text-indigo-700 font-extrabold' : 'bg-slate-50/60 border-slate-100 text-slate-700 font-bold hover:bg-slate-50'
                         }`}
                       >
-                        <UserCheck className="w-5 h-5 text-indigo-500" />
-                        <span className="text-xs">User Roles</span>
+                        <UserCheck className="w-4 h-4 text-indigo-500 shrink-0" />
+                        <span className="text-[11px] leading-tight break-words whitespace-normal tracking-tight">User Roles</span>
                       </button>
                     )}
 
@@ -501,12 +521,12 @@ export default function App() {
                           setStep('monitor');
                           setMobileMenuOpen(false);
                         }}
-                        className={`flex flex-col items-center gap-2 p-4 rounded-2xl border text-center transition-all ${
+                        className={`flex flex-col items-center justify-center gap-1.5 p-3 rounded-2xl border text-center transition-all min-h-[82px] ${
                           step === 'monitor' ? 'bg-indigo-50 border-indigo-200 text-indigo-700 font-extrabold' : 'bg-slate-50/60 border-slate-100 text-slate-700 font-bold hover:bg-slate-50'
                         }`}
                       >
-                        <Activity className="w-5 h-5 text-indigo-500" />
-                        <span className="text-xs">System Monitor</span>
+                        <Activity className="w-4 h-4 text-indigo-500 shrink-0" />
+                        <span className="text-[11px] leading-tight break-words whitespace-normal tracking-tight">System Monitor</span>
                       </button>
                     )}
 
@@ -516,10 +536,10 @@ export default function App() {
                         setTournamentId(null);
                         setMobileMenuOpen(false);
                       }}
-                      className="flex flex-col items-center gap-2 p-4 rounded-2xl border border-rose-150 bg-rose-50/50 text-rose-700 font-bold text-center hover:bg-rose-50 col-span-2 mt-2"
+                      className="flex flex-col items-center justify-center gap-1.5 p-3 rounded-2xl border border-rose-150 bg-rose-50/50 text-rose-700 font-bold text-center hover:bg-rose-50 col-span-2 mt-2 min-h-[60px]"
                     >
-                      <LogOut className="w-5 h-5 text-rose-500 animate-pulse" />
-                      <span className="text-xs">Exit Tournament</span>
+                      <LogOut className="w-4 h-4 text-rose-500 animate-pulse shrink-0" />
+                      <span className="text-[11px] leading-tight break-words whitespace-normal tracking-tight">Exit Tournament</span>
                     </button>
                   </div>
                 </motion.div>
