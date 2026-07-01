@@ -1,12 +1,8 @@
-import express from 'express';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import fs from 'fs';
-import { initializeApp } from 'firebase/app';
-import { getFirestore, collection, getDocs, doc, getDoc } from 'firebase/firestore';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const { initializeApp } = require('firebase/app');
+const { getFirestore, collection, getDocs, doc, getDoc } = require('firebase/firestore');
 
 // Initialize Firebase configuration for API routes
 const firebaseConfigPath = path.join(__dirname, 'firebase-applet-config.json');
@@ -313,11 +309,33 @@ async function startServer() {
 
   function serveStaticProduction(appInstance) {
     const distPath = path.join(__dirname, 'dist');
+    const indexHtmlPath = path.join(distPath, 'index.html');
+    
     appInstance.use(express.static(distPath));
     
     // Fallback all other routes to index.html for SPA routing
     appInstance.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      if (fs.existsSync(indexHtmlPath)) {
+        res.sendFile(indexHtmlPath);
+      } else {
+        res.status(404).send(`
+          <div style="font-family: system-ui, sans-serif; text-align: center; padding: 50px; color: #1e293b;">
+            <h1 style="color: #4f46e5; font-size: 36px; font-weight: 900; margin-bottom: 10px;">Frontend Build Not Found</h1>
+            <p style="font-size: 16px; color: #64748b; margin-bottom: 30px;">
+              The Node.js API server is running perfectly, but the frontend static files have not been built or uploaded yet.
+            </p>
+            <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; display: inline-block; text-align: left; max-width: 500px; width: 100%;">
+              <h3 style="font-size: 14px; font-weight: 700; color: #0f172a; margin-top: 0;">How to resolve this:</h3>
+              <ol style="font-size: 13px; color: #334155; line-height: 1.6; padding-left: 20px;">
+                <li>Run <strong>npm run build</strong> on your machine to build the static production files.</li>
+                <li>Upload the generated <strong>dist</strong> folder to your Hostinger server (put it next to your <strong>server.js</strong> file).</li>
+                <li>Restart your Node.js application from your Hostinger control panel.</li>
+              </ol>
+            </div>
+            <p style="font-size: 12px; color: #94a3b8; margin-top: 40px;">Badminton Tournament Manager • Live Server</p>
+          </div>
+        `);
+      }
     });
   }
 
@@ -327,8 +345,7 @@ async function startServer() {
   if (!isProduction) {
     try {
       console.log('Starting server in DEVELOPMENT mode with Vite dev middleware...');
-      // Dynamic import to prevent crash in production environments where vite might not be available
-      const { createServer: createViteServer } = await import('vite');
+      const { createServer: createViteServer } = require('vite');
       const vite = await createViteServer({
         server: { middlewareMode: true },
         appType: 'spa',
@@ -343,9 +360,16 @@ async function startServer() {
     serveStaticProduction(app);
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT}`);
-  });
+  // Defensive binding to support both standard ports and Passenger's named pipes/unix sockets on Hostinger
+  if (isNaN(PORT)) {
+    app.listen(PORT, () => {
+      console.log(`Server running on Unix socket/pipe ${PORT}`);
+    });
+  } else {
+    app.listen(Number(PORT), '0.0.0.0', () => {
+      console.log(`Server running on port ${PORT}`);
+    });
+  }
 }
 
 startServer().catch((err) => {
