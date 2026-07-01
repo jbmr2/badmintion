@@ -1,0 +1,36 @@
+# ----------------------------------------------------------------------
+# Badminton Tournament Manager - Hostinger Deployment Configuration
+# ----------------------------------------------------------------------
+
+<IfModule mod_passenger.c>
+    # 1. OPTION A: Hostinger / cPanel Phusion Passenger Deployment (RECOMMENDED)
+    # This instructs Hostinger's web server to hand over all routing to Node.js (server.js).
+    # Express will then handle both the /api/* routes and serve static frontend files.
+    PassengerEnabled on
+    PassengerAppType node
+    PassengerStartupFile server.js
+    
+    # Ensure correct environment (development or production)
+    PassengerAppEnv production
+</IfModule>
+
+<IfModule !mod_passenger.c>
+    # 2. OPTION B: Reverse Proxy Routing (If Node.js is running standalone on a Port via PM2)
+    # If Passenger is not available and you run "node server.js" on a port (e.g., 3000) using SSH/PM2:
+    RewriteEngine On
+    
+    # Let static assets be served directly by Apache/LiteSpeed for high performance
+    RewriteCond %{REQUEST_FILENAME} -f
+    RewriteRule ^ - [L]
+    
+    # Proxy all /api requests to the local Node.js backend port 3000
+    RewriteRule ^api/(.*)$ http://127.0.0.1:3000/api/$1 [P,L]
+    
+    # Fallback all other client-side routes to index.html for Single Page Application (SPA) routing
+    RewriteRule ^(.*)$ index.html [L]
+</IfModule>
+
+# Ensure Authorization headers are passed to your Express backend
+RewriteEngine On
+RewriteCond %{HTTP:Authorization} ^(.*)
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%1]

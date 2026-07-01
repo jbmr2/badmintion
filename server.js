@@ -1,12 +1,6 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { initializeApp } = require('firebase/app');
-const { getFirestore, collection, getDocs, doc, getDoc } = require('firebase/firestore');
-
-// Initialize Firebase configuration for API routes
-const firebaseConfigPath = path.join(__dirname, 'firebase-applet-config.json');
-let db = null;
 
 // Built-in fallback config to ensure API works even if the config file is missing on Hostinger
 const DEFAULT_FIREBASE_CONFIG = {
@@ -20,23 +14,39 @@ const DEFAULT_FIREBASE_CONFIG = {
   measurementId: ""
 };
 
-try {
-  let firebaseConfig = null;
-  if (fs.existsSync(firebaseConfigPath)) {
-    firebaseConfig = JSON.parse(fs.readFileSync(firebaseConfigPath, 'utf8'));
-    console.log('Firebase configuration loaded from firebase-applet-config.json');
-  } else {
-    console.warn('firebase-applet-config.json not found, using built-in fallback configuration.');
-    firebaseConfig = DEFAULT_FIREBASE_CONFIG;
-  }
+let db = null;
+let firestoreModule = null;
+let firebaseInitError = null;
 
-  if (firebaseConfig) {
-    const firebaseApp = initializeApp(firebaseConfig);
-    db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
-    console.log('Firebase successfully initialized in server.js');
+function initFirebase() {
+  if (db && firestoreModule) {
+    return { db, fs: firestoreModule };
   }
-} catch (error) {
-  console.error('Failed to initialize Firebase in server.js:', error);
+  
+  try {
+    const { initializeApp } = require('firebase/app');
+    firestoreModule = require('firebase/firestore');
+
+    const firebaseConfigPath = path.join(__dirname, 'firebase-applet-config.json');
+    let firebaseConfig = null;
+    
+    if (fs.existsSync(firebaseConfigPath)) {
+      firebaseConfig = JSON.parse(fs.readFileSync(firebaseConfigPath, 'utf8'));
+      console.log('Firebase configuration loaded from firebase-applet-config.json');
+    } else {
+      console.warn('firebase-applet-config.json not found, using built-in fallback configuration.');
+      firebaseConfig = DEFAULT_FIREBASE_CONFIG;
+    }
+
+    const firebaseApp = initializeApp(firebaseConfig);
+    db = firestoreModule.getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
+    console.log('Firebase successfully initialized dynamically in server.js');
+    return { db, fs: firestoreModule };
+  } catch (error) {
+    firebaseInitError = error;
+    console.error('Failed to initialize Firebase dynamically in server.js:', error);
+    throw error;
+  }
 }
 
 async function startServer() {
@@ -60,20 +70,43 @@ async function startServer() {
 
   // API middleware check
   const checkDb = (req, res, next) => {
-    if (!db) {
-      return res.status(503).json({ error: 'Database service is temporarily unavailable or not configured.' });
+    try {
+      const fb = initFirebase();
+      req.db = fb.db;
+      req.fs = fb.fs;
+      next();
+    } catch (err) {
+      return res.status(503).json({ 
+        error: 'Database service is temporarily unavailable or not configured.',
+        details: err.message,
+        suggestion: 'Please verify that you have run "npm install" on Hostinger and that the "firebase" package is installed.'
+      });
     }
-    next();
   };
 
   // API routes first
   app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', firebaseConfigured: !!db, timestamp: new Date().toISOString() });
+    let firebaseConfigured = false;
+    let errMessage = null;
+    try {
+      initFirebase();
+      firebaseConfigured = true;
+    } catch (err) {
+      errMessage = err.message;
+    }
+    res.json({ 
+      status: 'ok', 
+      firebaseConfigured, 
+      firebaseError: errMessage,
+      timestamp: new Date().toISOString() 
+    });
   });
 
   // GET all tournaments
   app.get('/api/tournaments', checkDb, async (req, res) => {
     try {
+      const { db, fs } = req;
+      const { collection, getDocs } = fs;
       const colRef = collection(db, 'tournaments');
       const snap = await getDocs(colRef);
       const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -86,6 +119,8 @@ async function startServer() {
   // GET specific tournament details
   app.get('/api/tournaments/:tournamentId', checkDb, async (req, res) => {
     try {
+      const { db, fs } = req;
+      const { doc, getDoc } = fs;
       const { tournamentId } = req.params;
       const docRef = doc(db, 'tournaments', tournamentId);
       const snap = await getDoc(docRef);
@@ -101,6 +136,8 @@ async function startServer() {
   // GET players in a tournament
   app.get('/api/tournaments/:tournamentId/players', checkDb, async (req, res) => {
     try {
+      const { db, fs } = req;
+      const { collection, getDocs } = fs;
       const { tournamentId } = req.params;
       const colRef = collection(db, `tournaments/${tournamentId}/players`);
       const snap = await getDocs(colRef);
@@ -114,6 +151,8 @@ async function startServer() {
   // GET groups in a tournament
   app.get('/api/tournaments/:tournamentId/groups', checkDb, async (req, res) => {
     try {
+      const { db, fs } = req;
+      const { collection, getDocs } = fs;
       const { tournamentId } = req.params;
       const colRef = collection(db, `tournaments/${tournamentId}/groups`);
       const snap = await getDocs(colRef);
@@ -127,6 +166,8 @@ async function startServer() {
   // GET fixtures in a tournament
   app.get('/api/tournaments/:tournamentId/fixtures', checkDb, async (req, res) => {
     try {
+      const { db, fs } = req;
+      const { collection, getDocs } = fs;
       const { tournamentId } = req.params;
       const colRef = collection(db, `tournaments/${tournamentId}/fixtures`);
       const snap = await getDocs(colRef);
@@ -140,6 +181,8 @@ async function startServer() {
   // GET matches/scores entered in a tournament
   app.get('/api/tournaments/:tournamentId/matches', checkDb, async (req, res) => {
     try {
+      const { db, fs } = req;
+      const { collection, getDocs } = fs;
       const { tournamentId } = req.params;
       const colRef = collection(db, `tournaments/${tournamentId}/matches`);
       const snap = await getDocs(colRef);
@@ -153,6 +196,8 @@ async function startServer() {
   // GET hierarchy organization roots in a tournament
   app.get('/api/tournaments/:tournamentId/roots', checkDb, async (req, res) => {
     try {
+      const { db, fs } = req;
+      const { collection, getDocs } = fs;
       const { tournamentId } = req.params;
       const colRef = collection(db, `tournaments/${tournamentId}/roots`);
       const snap = await getDocs(colRef);
@@ -166,6 +211,8 @@ async function startServer() {
   // GET global player registry
   app.get('/api/global-players', checkDb, async (req, res) => {
     try {
+      const { db, fs } = req;
+      const { collection, getDocs } = fs;
       const colRef = collection(db, 'players');
       const snap = await getDocs(colRef);
       const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -178,6 +225,8 @@ async function startServer() {
   // GET calculated points standings for a tournament
   app.get('/api/tournaments/:tournamentId/standings', checkDb, async (req, res) => {
     try {
+      const { db, fs } = req;
+      const { doc, getDoc, collection, getDocs } = fs;
       const { tournamentId } = req.params;
       
       // Get Tournament config
