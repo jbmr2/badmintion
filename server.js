@@ -464,6 +464,21 @@ async function startServer() {
   // Auto-detect production mode based on folder structure or environment variable
   const isProduction = process.env.NODE_ENV === 'production' || fs.existsSync(path.join(__dirname, 'dist'));
 
+  if (isProduction) {
+    const distPath = path.join(__dirname, 'dist');
+    const indexHtmlPath = path.join(distPath, 'index.html');
+    if (!fs.existsSync(indexHtmlPath)) {
+      console.log('--- dist/index.html not found in production! Attempting auto-build on Hostinger... ---');
+      try {
+        const { execSync } = require('child_process');
+        execSync('npm run build', { stdio: 'inherit', cwd: __dirname });
+        console.log('--- Auto-build completed successfully! ---');
+      } catch (buildError) {
+        console.error('Auto-build failed or skipped:', buildError.message);
+      }
+    }
+  }
+
   if (!isProduction) {
     try {
       console.log('Starting server in DEVELOPMENT mode with Vite dev middleware...');

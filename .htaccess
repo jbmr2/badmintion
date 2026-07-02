@@ -1,0 +1,26 @@
+# ----------------------------------------------------------------------
+# Badminton Tournament Manager - Hostinger / Apache Deployment
+# ----------------------------------------------------------------------
+
+# 1. Enable Passenger (mod_passenger) for Node.js Application Routing on Hostinger
+<IfModule mod_passenger.c>
+    PassengerEnabled on
+    PassengerAppType node
+    PassengerStartupFile server.js
+    PassengerAppEnv production
+</IfModule>
+
+# 2. Apache Rewrite Rules (fallback / safety net)
+RewriteEngine On
+RewriteBase /
+
+# Ensure Authorization headers are passed to your Express backend
+RewriteCond %{HTTP:Authorization} ^(.*)
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%1]
+
+# If mod_passenger is NOT active, and your Node app is running on port 3000,
+# proxy all requests to the running backend.
+<IfModule !mod_passenger.c>
+    # Pass all /api calls directly to Node port 3000
+    RewriteRule ^api/(.*)$ http://127.0.0.1:3000/api/$1 [P,L]
+</IfModule>
