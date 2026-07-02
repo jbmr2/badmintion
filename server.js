@@ -2,6 +2,21 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 
+// Global crash logging for Hostinger shared hosting diagnostics
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+  try {
+    fs.appendFileSync(path.join(__dirname, 'server-crash.log'), `[${new Date().toISOString()}] UNCAUGHT EXCEPTION:\n${err.stack || err.message}\n\n`);
+  } catch (e) {}
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection:', reason);
+  try {
+    fs.appendFileSync(path.join(__dirname, 'server-crash.log'), `[${new Date().toISOString()}] UNHANDLED REJECTION:\n${reason?.stack || reason}\n\n`);
+  } catch (e) {}
+});
+
 // Built-in fallback config to ensure API works even if the config file is missing on Hostinger
 const DEFAULT_FIREBASE_CONFIG = {
   projectId: "jbmrcricket",
@@ -481,5 +496,10 @@ async function startServer() {
 
 startServer().catch((err) => {
   console.error('Failed to start server:', err);
+  try {
+    fs.writeFileSync(path.join(__dirname, 'server-crash.log'), `[${new Date().toISOString()}] SERVER START FAILURE:\n${err.stack || err.message}\n\n`);
+  } catch (e) {
+    console.error('Failed to write server-crash.log:', e);
+  }
   process.exit(1);
 });
