@@ -995,56 +995,76 @@ export default function HierarchyManager({
       const fixture = fxts.find(f => f.id === match.fixtureId);
       if (!fixture) return;
 
-      const p1Id = fixture.player1Id;
-      const p2Id = fixture.player2Id;
-      const s = match.scores || {};
-      const winPointsP1 = getWinPoints(fixture.matchType, p1Id, fixture.groupName);
-      const winPointsP2 = getWinPoints(fixture.matchType, p2Id, fixture.groupName);
+      const team1PlayerIds: string[] = [];
+      const team2PlayerIds: string[] = [];
 
-      if (p1Id && !playerStats[p1Id]) {
-        playerStats[p1Id] = { wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0, points: 0, nonFamilyPoints: 0 };
+      const isDoublesMatch = !!(fixture.isDoubles || fixture.player1aId || fixture.player1bId || fixture.player2aId || fixture.player2bId);
+      if (isDoublesMatch) {
+        if (fixture.player1aId) team1PlayerIds.push(fixture.player1aId);
+        if (fixture.player1bId) team1PlayerIds.push(fixture.player1bId);
+        if (fixture.player2aId) team2PlayerIds.push(fixture.player2aId);
+        if (fixture.player2bId) team2PlayerIds.push(fixture.player2bId);
+
+        // Fallback
+        if (team1PlayerIds.length === 0 && fixture.player1Id) team1PlayerIds.push(fixture.player1Id);
+        if (team2PlayerIds.length === 0 && fixture.player2Id) team2PlayerIds.push(fixture.player2Id);
+      } else {
+        if (fixture.player1Id) team1PlayerIds.push(fixture.player1Id);
+        if (fixture.player2Id) team2PlayerIds.push(fixture.player2Id);
       }
-      if (p2Id && !playerStats[p2Id]) {
-        playerStats[p2Id] = { wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0, points: 0, nonFamilyPoints: 0 };
-      }
+
+      const s = match.scores || {};
+
+      team1PlayerIds.forEach(pId => {
+        if (!playerStats[pId]) {
+          playerStats[pId] = { wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0, points: 0, nonFamilyPoints: 0 };
+        }
+      });
+      team2PlayerIds.forEach(pId => {
+        if (!playerStats[pId]) {
+          playerStats[pId] = { wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0, points: 0, nonFamilyPoints: 0 };
+        }
+      });
 
       const isFamilyCategory = fixture.groupName?.toLowerCase().includes('family');
 
       // Update P1
-      if (p1Id) {
+      team1PlayerIds.forEach(pId => {
+        const winPointsP1 = getWinPoints(fixture.matchType, pId, fixture.groupName);
         if (match.winner === 'player1') {
-          playerStats[p1Id].wins++;
-          playerStats[p1Id].points += winPointsP1;
+          playerStats[pId].wins++;
+          playerStats[pId].points += winPointsP1;
           if (!isFamilyCategory) {
-            playerStats[p1Id].nonFamilyPoints += winPointsP1;
+            playerStats[pId].nonFamilyPoints += winPointsP1;
           }
         } else if (match.winner === 'player2') {
-          playerStats[p1Id].losses++;
+          playerStats[pId].losses++;
         }
 
-        playerStats[p1Id].gamesWon += Number(match.p1Games || 0);
-        playerStats[p1Id].gamesLost += Number(match.p2Games || 0);
-        playerStats[p1Id].pointsScored += Number(s.p1g1 || 0) + Number(s.p1g2 || 0) + Number(s.p1g3 || 0);
-        playerStats[p1Id].pointsAgainst += Number(s.p2g1 || 0) + Number(s.p2g2 || 0) + Number(s.p2g3 || 0);
-      }
+        playerStats[pId].gamesWon += Number(match.p1Games || 0);
+        playerStats[pId].gamesLost += Number(match.p2Games || 0);
+        playerStats[pId].pointsScored += Number(s.p1g1 || 0) + Number(s.p1g2 || 0) + Number(s.p1g3 || 0);
+        playerStats[pId].pointsAgainst += Number(s.p2g1 || 0) + Number(s.p2g2 || 0) + Number(s.p2g3 || 0);
+      });
 
       // Update P2
-      if (p2Id) {
+      team2PlayerIds.forEach(pId => {
+        const winPointsP2 = getWinPoints(fixture.matchType, pId, fixture.groupName);
         if (match.winner === 'player2') {
-          playerStats[p2Id].wins++;
-          playerStats[p2Id].points += winPointsP2;
+          playerStats[pId].wins++;
+          playerStats[pId].points += winPointsP2;
           if (!isFamilyCategory) {
-            playerStats[p2Id].nonFamilyPoints += winPointsP2;
+            playerStats[pId].nonFamilyPoints += winPointsP2;
           }
         } else if (match.winner === 'player1') {
-          playerStats[p2Id].losses++;
+          playerStats[pId].losses++;
         }
 
-        playerStats[p2Id].gamesWon += Number(match.p2Games || 0);
-        playerStats[p2Id].gamesLost += Number(match.p1Games || 0);
-        playerStats[p2Id].pointsScored += Number(s.p2g1 || 0) + Number(s.p2g2 || 0) + Number(s.p2g3 || 0);
-        playerStats[p2Id].pointsAgainst += Number(s.p1g1 || 0) + Number(s.p1g2 || 0) + Number(s.p1g3 || 0);
-      }
+        playerStats[pId].gamesWon += Number(match.p2Games || 0);
+        playerStats[pId].gamesLost += Number(match.p1Games || 0);
+        playerStats[pId].pointsScored += Number(s.p2g1 || 0) + Number(s.p2g2 || 0) + Number(s.p2g3 || 0);
+        playerStats[pId].pointsAgainst += Number(s.p1g1 || 0) + Number(s.p1g2 || 0) + Number(s.p1g3 || 0);
+      });
     });
 
     return playerStats;
@@ -1070,6 +1090,34 @@ export default function HierarchyManager({
       activeFixtures
     );
 
+    // Helper to fetch player's Chapter, Parent and Root keys
+    const getPlayerLocation = (pId: string) => {
+      const p = activeAssigned.find(item => item.id === pId);
+      if (!p) return null;
+      if (!isAllMode) {
+        return {
+          chapterKey: p.level2Id || null,
+          parentKey: p.level1Id || null,
+          rootKey: p.rootId || null
+        };
+      } else {
+        const l2 = activeL2.find(item => item.id === p.level2Id && item.tournamentId === p.tournamentId);
+        if (!l2) return null;
+        const parent = activeL1.find(l1 => l1.id === l2.level1Id && l1.tournamentId === l2.tournamentId);
+        const root = activeRoots.find(r => r.id === l2.rootId && r.tournamentId === l2.tournamentId);
+
+        const rName = (root ? root.name : 'Unknown').trim();
+        const pName = (parent ? parent.name : 'Unknown').trim();
+        const cName = l2.name.trim();
+
+        return {
+          chapterKey: `${rName}::${pName}::${cName}`.toLowerCase(),
+          parentKey: `${rName}::${pName}`.toLowerCase(),
+          rootKey: rName.toLowerCase()
+        };
+      }
+    };
+
     // 1. Chapters (Level 2) Stats
     const chapterStatsMap: Record<string, {
       id: string;
@@ -1083,7 +1131,7 @@ export default function HierarchyManager({
       pointsScored: number;
       pointsAgainst: number;
       playerCount: number;
-      points: number; // Sum of assigned players' points
+      points: number;
     }> = {};
 
     if (!isAllMode) {
@@ -1107,22 +1155,11 @@ export default function HierarchyManager({
         };
       });
 
-      // Accumulate player stats into Chapter stats
+      // Calculate playerCount by assigned players
       activeAssigned.forEach(p => {
         const chId = p.level2Id;
         if (chapterStatsMap[chId]) {
           chapterStatsMap[chId].playerCount++;
-          const pStats = playerStatsMap[p.id];
-          if (pStats) {
-            chapterStatsMap[chId].wins += pStats.wins;
-            chapterStatsMap[chId].losses += pStats.losses;
-            chapterStatsMap[chId].gamesWon += pStats.gamesWon;
-            chapterStatsMap[chId].gamesLost += pStats.gamesLost;
-            chapterStatsMap[chId].pointsScored += pStats.pointsScored;
-            chapterStatsMap[chId].pointsAgainst += pStats.pointsAgainst;
-            // Cumulative sum of players' points (excluding family categories points which result in zero points in L2):
-            chapterStatsMap[chId].points += pStats.nonFamilyPoints || 0;
-          }
         }
       });
     } else {
@@ -1155,7 +1192,7 @@ export default function HierarchyManager({
         }
       });
 
-      // Accumulate player stats into Chapter stats
+      // Calculate playerCount for activeAssigned in allMode
       activeAssigned.forEach(p => {
         const l2 = activeL2.find(item => item.id === p.level2Id && item.tournamentId === p.tournamentId);
         if (!l2) return;
@@ -1170,16 +1207,6 @@ export default function HierarchyManager({
         
         if (chapterStatsMap[key]) {
           chapterStatsMap[key].playerCount++;
-          const pStats = playerStatsMap[p.id];
-          if (pStats) {
-            chapterStatsMap[key].wins += pStats.wins;
-            chapterStatsMap[key].losses += pStats.losses;
-            chapterStatsMap[key].gamesWon += pStats.gamesWon;
-            chapterStatsMap[key].gamesLost += pStats.gamesLost;
-            chapterStatsMap[key].pointsScored += pStats.pointsScored;
-            chapterStatsMap[key].pointsAgainst += pStats.pointsAgainst;
-            chapterStatsMap[key].points += pStats.nonFamilyPoints || 0;
-          }
         }
       });
     }
@@ -1196,7 +1223,7 @@ export default function HierarchyManager({
       pointsScored: number;
       pointsAgainst: number;
       chapterCount: number;
-      points: number; // Sum of chapters' points
+      points: number;
     }> = {};
 
     if (!isAllMode) {
@@ -1218,20 +1245,10 @@ export default function HierarchyManager({
         };
       });
 
-      // Accumulate Chapter stats into Parent Team stats
-      Object.values(chapterStatsMap).forEach(ch => {
-        const l2 = activeL2.find(item => item.id === ch.id);
-        const l1Id = l2 ? l2.level1Id : null;
-        if (l1Id && parentStatsMap[l1Id]) {
-          parentStatsMap[l1Id].chapterCount++;
-          parentStatsMap[l1Id].wins += ch.wins;
-          parentStatsMap[l1Id].losses += ch.losses;
-          parentStatsMap[l1Id].gamesWon += ch.gamesWon;
-          parentStatsMap[l1Id].gamesLost += ch.gamesLost;
-          parentStatsMap[l1Id].pointsScored += ch.pointsScored;
-          parentStatsMap[l1Id].pointsAgainst += ch.pointsAgainst;
-          // Parent points is sum of Chapter points
-          parentStatsMap[l1Id].points += ch.points;
+      // Count chapterCount
+      activeL2.forEach(l2 => {
+        if (parentStatsMap[l2.level1Id]) {
+          parentStatsMap[l2.level1Id].chapterCount++;
         }
       });
     } else {
@@ -1259,18 +1276,16 @@ export default function HierarchyManager({
         }
       });
 
-      // Accumulate Chapter stats into Parent Team stats
-      Object.values(chapterStatsMap).forEach(ch => {
-        const key = `${ch.rootName}::${ch.parentName}`.toLowerCase();
+      // Count chapterCount in isAllMode
+      activeL2.forEach(l2 => {
+        const parent = activeL1.find(l1 => l1.id === l2.level1Id && l1.tournamentId === l2.tournamentId);
+        const root = activeRoots.find(r => r.id === l2.rootId && r.tournamentId === l2.tournamentId);
+        if (!parent) return;
+        const rName = (root ? root.name : 'Unknown').trim();
+        const pName = parent.name.trim();
+        const key = `${rName}::${pName}`.toLowerCase();
         if (parentStatsMap[key]) {
           parentStatsMap[key].chapterCount++;
-          parentStatsMap[key].wins += ch.wins;
-          parentStatsMap[key].losses += ch.losses;
-          parentStatsMap[key].gamesWon += ch.gamesWon;
-          parentStatsMap[key].gamesLost += ch.gamesLost;
-          parentStatsMap[key].pointsScored += ch.pointsScored;
-          parentStatsMap[key].pointsAgainst += ch.pointsAgainst;
-          parentStatsMap[key].points += ch.points;
         }
       });
     }
@@ -1286,7 +1301,7 @@ export default function HierarchyManager({
       pointsScored: number;
       pointsAgainst: number;
       parentCount: number;
-      points: number; // Sum of parents' points
+      points: number;
     }> = {};
 
     if (!isAllMode) {
@@ -1306,20 +1321,10 @@ export default function HierarchyManager({
         };
       });
 
-      // Accumulate Parent stats into Root stats
-      Object.values(parentStatsMap).forEach(p => {
-        const l1 = activeL1.find(item => item.id === p.id);
-        const rId = l1 ? l1.rootId : null;
-        if (rId && rootStatsMap[rId]) {
-          rootStatsMap[rId].parentCount++;
-          rootStatsMap[rId].wins += p.wins;
-          rootStatsMap[rId].losses += p.losses;
-          rootStatsMap[rId].gamesWon += p.gamesWon;
-          rootStatsMap[rId].gamesLost += p.gamesLost;
-          rootStatsMap[rId].pointsScored += p.pointsScored;
-          rootStatsMap[rId].pointsAgainst += p.pointsAgainst;
-          // Root points is sum of Parent points
-          rootStatsMap[rId].points += p.points;
+      // Count parentCount
+      activeL1.forEach(l1 => {
+        if (rootStatsMap[l1.rootId]) {
+          rootStatsMap[l1.rootId].parentCount++;
         }
       });
     } else {
@@ -1344,21 +1349,170 @@ export default function HierarchyManager({
         }
       });
 
-      // Accumulate Parent stats into Root stats
-      Object.values(parentStatsMap).forEach(p => {
-        const key = p.rootName.toLowerCase();
+      // Count parentCount in isAllMode
+      activeL1.forEach(l1 => {
+        const root = activeRoots.find(r => r.id === l1.rootId && r.tournamentId === l1.tournamentId);
+        if (!root) return;
+        const rName = root.name.trim();
+        const key = rName.toLowerCase();
         if (rootStatsMap[key]) {
           rootStatsMap[key].parentCount++;
-          rootStatsMap[key].wins += p.wins;
-          rootStatsMap[key].losses += p.losses;
-          rootStatsMap[key].gamesWon += p.gamesWon;
-          rootStatsMap[key].gamesLost += p.gamesLost;
-          rootStatsMap[key].pointsScored += p.pointsScored;
-          rootStatsMap[key].pointsAgainst += p.pointsAgainst;
-          rootStatsMap[key].points += p.points;
         }
       });
     }
+
+    // Accumulate match statistics directly into chapters, parent teams, and roots to ensure no double-counting
+    activeMatches.forEach(match => {
+      const fixture = activeFixtures.find(f => f.id === match.fixtureId);
+      if (!fixture) return;
+
+      const team1PlayerIds: string[] = [];
+      const team2PlayerIds: string[] = [];
+
+      const isDoublesMatch = !!(fixture.isDoubles || fixture.player1aId || fixture.player1bId || fixture.player2aId || fixture.player2bId);
+      if (isDoublesMatch) {
+        if (fixture.player1aId) team1PlayerIds.push(fixture.player1aId);
+        if (fixture.player1bId) team1PlayerIds.push(fixture.player1bId);
+        if (fixture.player2aId) team2PlayerIds.push(fixture.player2aId);
+        if (fixture.player2bId) team2PlayerIds.push(fixture.player2bId);
+
+        // Fallback
+        if (team1PlayerIds.length === 0 && fixture.player1Id) team1PlayerIds.push(fixture.player1Id);
+        if (team2PlayerIds.length === 0 && fixture.player2Id) team2PlayerIds.push(fixture.player2Id);
+      } else {
+        if (fixture.player1Id) team1PlayerIds.push(fixture.player1Id);
+        if (fixture.player2Id) team2PlayerIds.push(fixture.player2Id);
+      }
+
+      const s = match.scores || {};
+      const isFamilyCategory = fixture.groupName?.toLowerCase().includes('family');
+
+      // Get match win points based on stage
+      const t = fixture.matchType?.toLowerCase() || 'league';
+      let matchWinPoints = 5;
+      if (t.includes('pre_quarter') || t.includes('pre-quarter') || t.includes('pre quarter')) matchWinPoints = 5;
+      else if (t.includes('quarter') || t.includes('quater')) matchWinPoints = 10;
+      else if (t.includes('semi')) matchWinPoints = 15;
+      else if (t.includes('final')) matchWinPoints = 25;
+
+      const team1Chapters = new Set<string>();
+      const team1Parents = new Set<string>();
+      const team1Roots = new Set<string>();
+
+      team1PlayerIds.forEach(pId => {
+        const loc = getPlayerLocation(pId);
+        if (loc) {
+          if (loc.chapterKey) team1Chapters.add(loc.chapterKey);
+          if (loc.parentKey) team1Parents.add(loc.parentKey);
+          if (loc.rootKey) team1Roots.add(loc.rootKey);
+        }
+      });
+
+      const team2Chapters = new Set<string>();
+      const team2Parents = new Set<string>();
+      const team2Roots = new Set<string>();
+
+      team2PlayerIds.forEach(pId => {
+        const loc = getPlayerLocation(pId);
+        if (loc) {
+          if (loc.chapterKey) team2Chapters.add(loc.chapterKey);
+          if (loc.parentKey) team2Parents.add(loc.parentKey);
+          if (loc.rootKey) team2Roots.add(loc.rootKey);
+        }
+      });
+
+      // Update Team 1 Chapter, Parent and Root Stats
+      team1Chapters.forEach(chKey => {
+        if (chapterStatsMap[chKey]) {
+          if (match.winner === 'player1') {
+            chapterStatsMap[chKey].wins++;
+            chapterStatsMap[chKey].points += isFamilyCategory ? 0 : matchWinPoints;
+          } else if (match.winner === 'player2') {
+            chapterStatsMap[chKey].losses++;
+          }
+          chapterStatsMap[chKey].gamesWon += Number(match.p1Games || 0);
+          chapterStatsMap[chKey].gamesLost += Number(match.p2Games || 0);
+          chapterStatsMap[chKey].pointsScored += Number(s.p1g1 || 0) + Number(s.p1g2 || 0) + Number(s.p1g3 || 0);
+          chapterStatsMap[chKey].pointsAgainst += Number(s.p2g1 || 0) + Number(s.p2g2 || 0) + Number(s.p2g3 || 0);
+        }
+      });
+
+      team1Parents.forEach(pKey => {
+        if (parentStatsMap[pKey]) {
+          if (match.winner === 'player1') {
+            parentStatsMap[pKey].wins++;
+            parentStatsMap[pKey].points += isFamilyCategory ? 0 : matchWinPoints;
+          } else if (match.winner === 'player2') {
+            parentStatsMap[pKey].losses++;
+          }
+          parentStatsMap[pKey].gamesWon += Number(match.p1Games || 0);
+          parentStatsMap[pKey].gamesLost += Number(match.p2Games || 0);
+          parentStatsMap[pKey].pointsScored += Number(s.p1g1 || 0) + Number(s.p1g2 || 0) + Number(s.p1g3 || 0);
+          parentStatsMap[pKey].pointsAgainst += Number(s.p2g1 || 0) + Number(s.p2g2 || 0) + Number(s.p2g3 || 0);
+        }
+      });
+
+      team1Roots.forEach(rKey => {
+        if (rootStatsMap[rKey]) {
+          if (match.winner === 'player1') {
+            rootStatsMap[rKey].wins++;
+            rootStatsMap[rKey].points += isFamilyCategory ? 0 : matchWinPoints;
+          } else if (match.winner === 'player2') {
+            rootStatsMap[rKey].losses++;
+          }
+          rootStatsMap[rKey].gamesWon += Number(match.p1Games || 0);
+          rootStatsMap[rKey].gamesLost += Number(match.p2Games || 0);
+          rootStatsMap[rKey].pointsScored += Number(s.p1g1 || 0) + Number(s.p1g2 || 0) + Number(s.p1g3 || 0);
+          rootStatsMap[rKey].pointsAgainst += Number(s.p2g1 || 0) + Number(s.p2g2 || 0) + Number(s.p2g3 || 0);
+        }
+      });
+
+      // Update Team 2 Chapter, Parent and Root Stats
+      team2Chapters.forEach(chKey => {
+        if (chapterStatsMap[chKey]) {
+          if (match.winner === 'player2') {
+            chapterStatsMap[chKey].wins++;
+            chapterStatsMap[chKey].points += isFamilyCategory ? 0 : matchWinPoints;
+          } else if (match.winner === 'player1') {
+            chapterStatsMap[chKey].losses++;
+          }
+          chapterStatsMap[chKey].gamesWon += Number(match.p2Games || 0);
+          chapterStatsMap[chKey].gamesLost += Number(match.p1Games || 0);
+          chapterStatsMap[chKey].pointsScored += Number(s.p2g1 || 0) + Number(s.p2g2 || 0) + Number(s.p2g3 || 0);
+          chapterStatsMap[chKey].pointsAgainst += Number(s.p1g1 || 0) + Number(s.p1g2 || 0) + Number(s.p1g3 || 0);
+        }
+      });
+
+      team2Parents.forEach(pKey => {
+        if (parentStatsMap[pKey]) {
+          if (match.winner === 'player2') {
+            parentStatsMap[pKey].wins++;
+            parentStatsMap[pKey].points += isFamilyCategory ? 0 : matchWinPoints;
+          } else if (match.winner === 'player1') {
+            parentStatsMap[pKey].losses++;
+          }
+          parentStatsMap[pKey].gamesWon += Number(match.p2Games || 0);
+          parentStatsMap[pKey].gamesLost += Number(match.p1Games || 0);
+          parentStatsMap[pKey].pointsScored += Number(s.p2g1 || 0) + Number(s.p2g2 || 0) + Number(s.p2g3 || 0);
+          parentStatsMap[pKey].pointsAgainst += Number(s.p1g1 || 0) + Number(s.p1g2 || 0) + Number(s.p1g3 || 0);
+        }
+      });
+
+      team2Roots.forEach(rKey => {
+        if (rootStatsMap[rKey]) {
+          if (match.winner === 'player2') {
+            rootStatsMap[rKey].wins++;
+            rootStatsMap[rKey].points += isFamilyCategory ? 0 : matchWinPoints;
+          } else if (match.winner === 'player1') {
+            rootStatsMap[rKey].losses++;
+          }
+          rootStatsMap[rKey].gamesWon += Number(match.p2Games || 0);
+          rootStatsMap[rKey].gamesLost += Number(match.p1Games || 0);
+          rootStatsMap[rKey].pointsScored += Number(s.p2g1 || 0) + Number(s.p2g2 || 0) + Number(s.p2g3 || 0);
+          rootStatsMap[rKey].pointsAgainst += Number(s.p1g1 || 0) + Number(s.p1g2 || 0) + Number(s.p1g3 || 0);
+        }
+      });
+    });
 
     // Show all roots in the standings
     const targetRootsList = Object.values(rootStatsMap);
@@ -1747,7 +1901,11 @@ export default function HierarchyManager({
                                             {/* Dotted backbone behind player nodes */}
                                             <div className="absolute top-0 bottom-4 left-1/2 -translate-x-1/2 w-[1px] border-l border-dashed border-slate-300" />
                                             
-                                            {players.map((p) => (
+                                            {players.filter((p, index, self) =>
+                                              index === self.findIndex((t) => (
+                                                t.name === p.name
+                                              ))
+                                            ).map((p) => (
                                               <div key={p.id} className="relative flex items-center justify-center w-40 z-10">
                                                 {/* Player Node Card */}
                                                 <div className="w-full px-2.5 py-1.5 bg-white hover:bg-slate-50 border border-slate-100 rounded-lg flex items-center justify-between shadow-xs transition duration-150">

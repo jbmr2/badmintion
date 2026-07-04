@@ -18,7 +18,7 @@ import {
   Plus
 } from 'lucide-react';
 
-export default function GlobalPlayerRegistry() {
+export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' | 'scorer' | 'user' }) {
   const [masterPlayers, setMasterPlayers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -348,6 +348,23 @@ export default function GlobalPlayerRegistry() {
             Build and manage your master registry of players. Registered profiles can be searched and auto-assigned instantly in any tournament by simply entering their phone number!
           </p>
         </div>
+        <button
+          onClick={() => {
+            const csvContent = "data:text/csv;charset=utf-8," + 
+              ["Name,Age,Mobile,Chapter"].concat(masterPlayers.map(p => `${p.name},${p.age || ''},${p.mobile || ''},${p.l2 || ''}`)).join("\n");
+            const encodedUri = encodeURI(csvContent);
+            const link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            link.setAttribute("download", "master_players_registry.csv");
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+          }}
+          className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-800 transition"
+        >
+          <FileSpreadsheet className="w-4 h-4" />
+          Download CSV
+        </button>
       </div>
 
       {/* Tabs */}
@@ -507,16 +524,22 @@ export default function GlobalPlayerRegistry() {
               </label>
               <input 
                 value={manualForm.mobile}
-                disabled={!!editingPlayerId} // Disable key editing to protect integrity, or warn user
+                disabled={!!editingPlayerId && userRole !== 'admin'} // Allowed for admins
                 onChange={(e) => setManualForm({...manualForm, mobile: e.target.value})}
                 placeholder="e.g. 9876543210"
                 className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-semibold focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition disabled:bg-slate-100 disabled:text-slate-400"
                 type="tel"
               />
               {editingPlayerId && (
-                <p className="text-[10px] text-amber-600 font-bold">
-                  ⚠️ Phone number is the profile unique ID and cannot be modified. If wrong, please recreate.
-                </p>
+                userRole === 'admin' ? (
+                  <p className="text-[10px] text-indigo-600 font-bold">
+                    🛡️ Admin Mode: You can modify the mobile number. Saving will delete the old profile and migrate it to the new number.
+                  </p>
+                ) : (
+                  <p className="text-[10px] text-amber-600 font-bold">
+                    ⚠️ Phone number is the profile unique ID and cannot be modified. If wrong, please recreate. (Admins can change this)
+                  </p>
+                )
               )}
             </div>
 

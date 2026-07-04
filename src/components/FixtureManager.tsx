@@ -11,7 +11,8 @@ import {
   updateDoc, 
   doc, 
   writeBatch, 
-  where 
+  where,
+  increment 
 } from 'firebase/firestore';
 import { 
   Plus, 
@@ -50,11 +51,31 @@ export default function FixtureManager({
   const [players, setPlayers] = useState<any[]>([]);
   const [manualPlayer1, setManualPlayer1] = useState('');
   const [manualPlayer2, setManualPlayer2] = useState('');
+  const [manualPlayer1a, setManualPlayer1a] = useState('');
+  const [manualPlayer1b, setManualPlayer1b] = useState('');
+  const [manualPlayer2a, setManualPlayer2a] = useState('');
+  const [manualPlayer2b, setManualPlayer2b] = useState('');
+  const [isDoubles, setIsDoubles] = useState(false);
   const [manualGroup, setManualGroup] = useState('');
   const [pointsTarget, setPointsTarget] = useState('15');
   const [matchType, setMatchType] = useState<'league' | 'pre_quarter' | 'quarter' | 'semi' | 'final'>('league');
   const [groups, setGroups] = useState<any[]>([]);
   const [editingFixture, setEditingFixture] = useState<any | null>(null);
+
+  useEffect(() => {
+    if (manualGroup) {
+      const selectedGroupObj = groups.find(g => g.name === manualGroup);
+      if (selectedGroupObj) {
+        const gpPlayers = players.filter(p => selectedGroupObj.playerIds.includes(p.id));
+        const hasPairs = gpPlayers.some(p => p.pairId);
+        if (hasPairs) {
+          setIsDoubles(true);
+        } else {
+          setIsDoubles(false);
+        }
+      }
+    }
+  }, [manualGroup, groups, players]);
   const [fixtureToDelete, setFixtureToDelete] = useState<any | null>(null);
   const [manualCourt, setManualCourt] = useState('');
   const [courts, setCourts] = useState<string[]>(['Court 1', 'Court 2', 'Court 3', 'Court 4', 'Court 5', 'Court 6']);
@@ -225,23 +246,52 @@ export default function FixtureManager({
 
   const addManualFixture = async () => {
     if (isGenerating) return;
-    if (!manualPlayer1 || !manualPlayer2 || manualPlayer1 === manualPlayer2 || !manualGroup) return;
+    
+    let p1a, p1b, p2a, p2b;
+    
+    if (isDoubles) {
+      if (!manualPlayer1a || !manualPlayer1b || !manualPlayer2a || !manualPlayer2b || 
+          manualPlayer1a === manualPlayer1b || manualPlayer2a === manualPlayer2b || 
+          !manualGroup) return;
+      p1a = manualPlayer1a; p1b = manualPlayer1b; p2a = manualPlayer2a; p2b = manualPlayer2b;
+    } else {
+      if (!manualPlayer1 || !manualPlayer2 || manualPlayer1 === manualPlayer2 || !manualGroup) return;
+      p1a = manualPlayer1; p1b = ''; p2a = manualPlayer2; p2b = '';
+    }
+
     try {
       setIsGenerating(true);
-      const docRef = await addDoc(collection(db, `tournaments/${tournamentId}/fixtures`), {
-        player1Id: manualPlayer1,
-        player1Name: playerMap[manualPlayer1],
-        player2Id: manualPlayer2,
-        player2Name: playerMap[manualPlayer2],
+      const fixtureData: any = {
         groupName: manualGroup,
         matchType: matchType,
         pointsTarget: pointsTarget,
         status: 'pending',
-        court: manualCourt
-      });
+        court: manualCourt,
+        isDoubles: isDoubles
+      };
+      
+      if (isDoubles) {
+        fixtureData.player1aId = p1a;
+        fixtureData.player1aName = playerMap[p1a];
+        fixtureData.player1bId = p1b;
+        fixtureData.player1bName = playerMap[p1b];
+        fixtureData.player2aId = p2a;
+        fixtureData.player2aName = playerMap[p2a];
+        fixtureData.player2bId = p2b;
+        fixtureData.player2bName = playerMap[p2b];
+      } else {
+        fixtureData.player1Id = p1a;
+        fixtureData.player1Name = playerMap[p1a];
+        fixtureData.player2Id = p2a;
+        fixtureData.player2Name = playerMap[p2a];
+      }
+
+      const docRef = await addDoc(collection(db, `tournaments/${tournamentId}/fixtures`), fixtureData);
       await updateDoc(docRef, { matchId: generateShortId() });
-      setManualPlayer1('');
-      setManualPlayer2('');
+      
+      setManualPlayer1(''); setManualPlayer2('');
+      setManualPlayer1a(''); setManualPlayer1b('');
+      setManualPlayer2a(''); setManualPlayer2b('');
       setManualGroup('');
       setMatchType('league');
       setManualCourt('');
@@ -256,6 +306,35 @@ export default function FixtureManager({
     setFixtureToDelete(fixture);
   };
 
+  const getPointsDelta = (fixture?: any) => {
+    if (!fixture) return 5;
+    const t = fixture.matchType?.toLowerCase() || 'league';
+    if (t.includes('pre_quarter') || t.includes('pre-quarter') || t.includes('pre quarter')) return 5;
+    if (t.includes('quarter') || t.includes('quater')) return 10;
+    if (t.includes('semi')) return 15;
+    if (t.includes('final')) return 25;
+    return 5;
+  };
+
+  const adjustTeamPoints = async (winnerPlayerId: string, delta: number, fixture?: any) => {
+    if (fixture?.groupName?.toLowerCase().includes('family')) {
+      return;
+    }
+    try {
+      const teamsSnapshot = await getDocs(collection(db, `tournaments/${tournamentId}/teams`));
+      const teamDoc = teamsSnapshot.docs.find(doc => doc.data().playerIds?.includes(winnerPlayerId));
+      if (teamDoc) {
+        const teamData = teamDoc.data();
+        if (teamData?.name?.toLowerCase().includes('family')) {
+          return;
+        }
+        await updateDoc(teamDoc.ref, { points: increment(delta) });
+      }
+    } catch (e) {
+      console.error("Error adjusting team points:", e);
+    }
+  };
+
   const handleConfirmDelete = async () => {
     if (!fixtureToDelete) return;
     const id = fixtureToDelete.id;
@@ -263,11 +342,27 @@ export default function FixtureManager({
     setFixtureToDelete(null); // Close the confirmation modal immediately so the user can see the loading state on the card
 
     try {
-      await deleteDoc(doc(db, `tournaments/${tournamentId}/fixtures`, id));
-      
-      // Delete associated match result if it exists
+      // Find and delete associated match result if it exists
       const matchesQuery = query(collection(db, `tournaments/${tournamentId}/matches`), where('fixtureId', '==', id));
       const querySnapshot = await getDocs(matchesQuery);
+
+      // If completed match exists, adjust team points (revert win)
+      for (const mDoc of querySnapshot.docs) {
+        const mData = mDoc.data();
+        if (mData && mData.winner) {
+          const isDoublesMatch = !!(fixtureToDelete.isDoubles || fixtureToDelete.player1aId || fixtureToDelete.player1bId || fixtureToDelete.player2aId || fixtureToDelete.player2bId);
+          const winnerPlayerId = mData.winner === 'player1'
+            ? (isDoublesMatch ? fixtureToDelete.player1aId : fixtureToDelete.player1Id)
+            : (isDoublesMatch ? fixtureToDelete.player2aId : fixtureToDelete.player2Id);
+          
+          if (winnerPlayerId) {
+            const pointsDelta = getPointsDelta(fixtureToDelete);
+            await adjustTeamPoints(winnerPlayerId, -pointsDelta, fixtureToDelete);
+          }
+        }
+      }
+
+      await deleteDoc(doc(db, `tournaments/${tournamentId}/fixtures`, id));
       
       const batch = writeBatch(db);
       querySnapshot.forEach((doc) => {
@@ -283,17 +378,35 @@ export default function FixtureManager({
 
   const handleEdit = (fixture: any) => {
     setEditingFixture(fixture);
-    setManualPlayer1(fixture.player1Id);
-    setManualPlayer2(fixture.player2Id);
     setManualGroup(fixture.groupName);
     setMatchType(fixture.matchType || 'league');
     setManualCourt(fixture.court || '');
+    setIsDoubles(!!fixture.isDoubles);
+    if (fixture.isDoubles) {
+      setManualPlayer1a(fixture.player1aId || '');
+      setManualPlayer1b(fixture.player1bId || '');
+      setManualPlayer2a(fixture.player2aId || '');
+      setManualPlayer2b(fixture.player2bId || '');
+      setManualPlayer1('');
+      setManualPlayer2('');
+    } else {
+      setManualPlayer1(fixture.player1Id || '');
+      setManualPlayer2(fixture.player2Id || '');
+      setManualPlayer1a('');
+      setManualPlayer1b('');
+      setManualPlayer2a('');
+      setManualPlayer2b('');
+    }
   };
 
   const handleCancelEdit = () => {
     setEditingFixture(null);
     setManualPlayer1('');
     setManualPlayer2('');
+    setManualPlayer1a('');
+    setManualPlayer1b('');
+    setManualPlayer2a('');
+    setManualPlayer2b('');
     setManualGroup('');
     setMatchType('league');
     setManualCourt('');
@@ -301,21 +414,54 @@ export default function FixtureManager({
 
   const handleUpdate = async () => {
     if (isGenerating) return;
-    if (!editingFixture || !manualPlayer1 || !manualPlayer2 || !manualGroup) return;
+    if (!editingFixture || !manualGroup) return;
     try {
       setIsGenerating(true);
-      await updateDoc(doc(db, `tournaments/${tournamentId}/fixtures`, editingFixture.id), {
-        player1Id: manualPlayer1,
-        player1Name: playerMap[manualPlayer1],
-        player2Id: manualPlayer2,
-        player2Name: playerMap[manualPlayer2],
+      const updateData: any = {
         groupName: manualGroup,
         matchType: matchType,
-        court: manualCourt
-      });
+        court: manualCourt,
+        isDoubles: isDoubles
+      };
+
+      if (isDoubles) {
+        updateData.player1aId = manualPlayer1a;
+        updateData.player1aName = playerMap[manualPlayer1a] || '';
+        updateData.player1bId = manualPlayer1b;
+        updateData.player1bName = playerMap[manualPlayer1b] || '';
+        updateData.player2aId = manualPlayer2a;
+        updateData.player2aName = playerMap[manualPlayer2a] || '';
+        updateData.player2bId = manualPlayer2b;
+        updateData.player2bName = playerMap[manualPlayer2b] || '';
+        // Clear singles fields
+        updateData.player1Id = '';
+        updateData.player1Name = '';
+        updateData.player2Id = '';
+        updateData.player2Name = '';
+      } else {
+        updateData.player1Id = manualPlayer1;
+        updateData.player1Name = playerMap[manualPlayer1] || '';
+        updateData.player2Id = manualPlayer2;
+        updateData.player2Name = playerMap[manualPlayer2] || '';
+        // Clear doubles fields
+        updateData.player1aId = '';
+        updateData.player1aName = '';
+        updateData.player1bId = '';
+        updateData.player1bName = '';
+        updateData.player2aId = '';
+        updateData.player2aName = '';
+        updateData.player2bId = '';
+        updateData.player2bName = '';
+      }
+
+      await updateDoc(doc(db, `tournaments/${tournamentId}/fixtures`, editingFixture.id), updateData);
       setEditingFixture(null);
       setManualPlayer1('');
       setManualPlayer2('');
+      setManualPlayer1a('');
+      setManualPlayer1b('');
+      setManualPlayer2a('');
+      setManualPlayer2b('');
       setManualGroup('');
       setMatchType('league');
       setManualCourt('');
@@ -334,23 +480,104 @@ export default function FixtureManager({
       const batch = writeBatch(db);
       const fixturesCol = collection(db, `tournaments/${tournamentId}/fixtures`);
 
-      for (let i = 0; i < filteredPlayers.length; i++) {
-          for (let j = i + 1; j < filteredPlayers.length; j++) {
-              const newDocRef = doc(fixturesCol);
-              batch.set(newDocRef, {
-                  player1Id: filteredPlayers[i].id,
-                  player1Name: filteredPlayers[i].name,
-                  player2Id: filteredPlayers[j].id,
-                  player2Name: filteredPlayers[j].name,
-                  groupName: manualGroup,
-                  matchType: 'league',
-                  pointsTarget: pointsTarget,
-                  status: 'pending',
-                  matchId: generateShortId(),
-                  court: ''
-              });
+      if (isDoubles) {
+        // Group players into pairs/teams
+        const pairsMap = new Map<string, any[]>();
+        filteredPlayers.forEach(p => {
+          if (p.pairId) {
+            if (!pairsMap.has(p.pairId)) pairsMap.set(p.pairId, []);
+            pairsMap.get(p.pairId)!.push(p);
           }
+        });
+
+        const teams: Array<{ playerA: any; playerB: any }> = [];
+
+        // 1. Add grouped pairs
+        pairsMap.forEach((members) => {
+          if (members.length >= 2) {
+            teams.push({
+              playerA: members[0],
+              playerB: members[1]
+            });
+          } else if (members.length === 1) {
+            teams.push({
+              playerA: members[0],
+              playerB: null
+            });
+          }
+        });
+
+        // 2. Add players without pairId (consecutively pair them up to form doubles teams)
+        const unpaired = filteredPlayers.filter(p => !p.pairId);
+        for (let k = 0; k < unpaired.length; k += 2) {
+          if (k + 1 < unpaired.length) {
+            teams.push({
+              playerA: unpaired[k],
+              playerB: unpaired[k+1]
+            });
+          } else {
+            teams.push({
+              playerA: unpaired[k],
+              playerB: null
+            });
+          }
+        }
+
+        if (teams.length < 2) {
+          alert("Not enough doubles teams/pairs in this group to generate fixtures. Minimum 2 teams required.");
+          setIsGenerating(false);
+          return;
+        }
+
+        for (let i = 0; i < teams.length; i++) {
+          for (let j = i + 1; j < teams.length; j++) {
+            const team1 = teams[i];
+            const team2 = teams[j];
+
+            const newDocRef = doc(fixturesCol);
+            const fixtureData: any = {
+              groupName: manualGroup,
+              matchType: 'league',
+              pointsTarget: pointsTarget,
+              status: 'pending',
+              matchId: generateShortId(),
+              court: '',
+              isDoubles: true,
+              player1aId: team1.playerA.id,
+              player1aName: team1.playerA.name,
+              player1bId: team1.playerB ? team1.playerB.id : '',
+              player1bName: team1.playerB ? team1.playerB.name : '',
+              player2aId: team2.playerA.id,
+              player2aName: team2.playerA.name,
+              player2bId: team2.playerB ? team2.playerB.id : '',
+              player2bName: team2.playerB ? team2.playerB.name : '',
+            };
+            batch.set(newDocRef, fixtureData);
+          }
+        }
+      } else {
+        // Singles round-robin generation
+        for (let i = 0; i < filteredPlayers.length; i++) {
+          for (let j = i + 1; j < filteredPlayers.length; j++) {
+            const newDocRef = doc(fixturesCol);
+            const fixtureData: any = {
+              groupName: manualGroup,
+              matchType: 'league',
+              pointsTarget: pointsTarget,
+              status: 'pending',
+              matchId: generateShortId(),
+              court: '',
+              isDoubles: false,
+              player1Id: filteredPlayers[i].id,
+              player1Name: filteredPlayers[i].name,
+              player2Id: filteredPlayers[j].id,
+              player2Name: filteredPlayers[j].name,
+            };
+            batch.set(newDocRef, fixtureData);
+          }
+        }
       }
+
       await batch.commit();
       setManualGroup('');
     } catch (e) {
@@ -389,8 +616,13 @@ export default function FixtureManager({
   // Filter and search computation
   const filteredFixtures = fixtures.filter(f => {
     const matchesSearch = !searchQuery.trim() || 
-      (f.player1Name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (f.player2Name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (f.isDoubles 
+        ? ((f.player1aName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+           (f.player1bName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+           (f.player2aName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+           (f.player2bName || '').toLowerCase().includes(searchQuery.toLowerCase()))
+        : ((f.player1Name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+           (f.player2Name || '').toLowerCase().includes(searchQuery.toLowerCase()))) ||
       (f.matchId || '').toLowerCase().includes(searchQuery.toLowerCase());
     
     const matchesGroup = groupFilter === 'all' || f.groupName === groupFilter;
@@ -494,37 +726,84 @@ export default function FixtureManager({
               Player Matchup
             </div>
             
+            <div className="flex items-center gap-2">
+              <input 
+                type="checkbox"
+                id="isDoublesToggle"
+                checked={isDoubles}
+                onChange={e => setIsDoubles(e.target.checked)}
+                className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
+              />
+              <label htmlFor="isDoublesToggle" className="text-xs font-bold text-slate-700">Doubles Match</label>
+            </div>
+
             <div className="space-y-2">
-              <label className="text-[10px] font-bold text-slate-500">Player 1</label>
+              <label className="text-[10px] font-bold text-slate-500">{isDoubles ? 'Team 1 (Player A)' : 'Player 1'}</label>
               <select 
-                value={manualPlayer1} 
-                onChange={e => setManualPlayer1(e.target.value)} 
+                value={isDoubles ? manualPlayer1a : manualPlayer1} 
+                onChange={e => isDoubles ? setManualPlayer1a(e.target.value) : setManualPlayer1(e.target.value)} 
                 className="w-full bg-white border border-slate-200 text-slate-700 p-2.5 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition"
               >
-                <option value="">Select Player 1</option>
+                <option value="">Select Player</option>
                 {filteredPlayers.map(p => (
-                  <option key={p.id} value={p.id} disabled={p.id === manualPlayer2}>
+                  <option key={p.id} value={p.id} disabled={p.id === manualPlayer1b || p.id === manualPlayer2a || p.id === manualPlayer2b}>
                     {p.name}
                   </option>
                 ))}
               </select>
             </div>
 
+            {isDoubles && (
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-500">Team 1 (Player B)</label>
+                <select 
+                  value={manualPlayer1b} 
+                  onChange={e => setManualPlayer1b(e.target.value)} 
+                  className="w-full bg-white border border-slate-200 text-slate-700 p-2.5 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition"
+                >
+                  <option value="">Select Player</option>
+                  {filteredPlayers.map(p => (
+                    <option key={p.id} value={p.id} disabled={p.id === manualPlayer1a || p.id === manualPlayer2a || p.id === manualPlayer2b}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <div className="space-y-2">
-              <label className="text-[10px] font-bold text-slate-500">Player 2</label>
+              <label className="text-[10px] font-bold text-slate-500">{isDoubles ? 'Team 2 (Player A)' : 'Player 2'}</label>
               <select 
-                value={manualPlayer2} 
-                onChange={e => setManualPlayer2(e.target.value)} 
+                value={isDoubles ? manualPlayer2a : manualPlayer2} 
+                onChange={e => isDoubles ? setManualPlayer2a(e.target.value) : setManualPlayer2(e.target.value)} 
                 className="w-full bg-white border border-slate-200 text-slate-700 p-2.5 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition"
               >
-                <option value="">Select Player 2</option>
+                <option value="">Select Player</option>
                 {filteredPlayers.map(p => (
-                  <option key={p.id} value={p.id} disabled={p.id === manualPlayer1}>
+                  <option key={p.id} value={p.id} disabled={p.id === manualPlayer1a || p.id === manualPlayer1b || p.id === manualPlayer2b}>
                     {p.name}
                   </option>
                 ))}
               </select>
             </div>
+
+            {isDoubles && (
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-500">Team 2 (Player B)</label>
+                <select 
+                  value={manualPlayer2b} 
+                  onChange={e => setManualPlayer2b(e.target.value)} 
+                  className="w-full bg-white border border-slate-200 text-slate-700 p-2.5 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition"
+                >
+                  <option value="">Select Player</option>
+                  {filteredPlayers.map(p => (
+                    <option key={p.id} value={p.id} disabled={p.id === manualPlayer1a || p.id === manualPlayer1b || p.id === manualPlayer2a}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
 
           {/* Column 2: Metadata & Location */}
@@ -611,7 +890,7 @@ export default function FixtureManager({
                 ) : editingFixture ? (
                   <>Save Changes</>
                 ) : (
-                  <>Add Single Match</>
+                  <>{isDoubles ? 'Add Doubles Match' : 'Add Single Match'}</>
                 )}
               </button>
 
@@ -837,42 +1116,99 @@ export default function FixtureManager({
 
                           {/* Match Card Versus Section (Split columns) */}
                           <div className="flex flex-col justify-center space-y-2.5 my-2.5 flex-grow">
-                            <div className="flex items-start justify-between text-xs gap-2">
-                              <div className="flex flex-col min-w-0">
-                                <span className="font-black text-slate-800 truncate max-w-[130px]" title={f.player1Name}>
-                                  {f.player1Name}
-                                </span>
-                                {playerL2Map[f.player1Id] && (
-                                  <span className="text-[9px] text-indigo-600/90 font-semibold truncate mt-0.5 bg-indigo-50/50 px-1 py-0.25 rounded" title={`L2: ${playerL2Map[f.player1Id]}`}>
-                                    L2: {playerL2Map[f.player1Id]}
-                                  </span>
-                                )}
-                              </div>
-                              <span className="text-[9px] text-slate-400 uppercase tracking-widest font-extrabold shrink-0 mt-0.5">P1</span>
-                            </div>
+                            {f.isDoubles ? (
+                              <>
+                                <div className="flex items-start justify-between text-xs gap-2">
+                                  <div className="flex flex-col min-w-0">
+                                    <span className="font-black text-slate-800 truncate" title={`${f.player1aName} & ${f.player1bName}`}>
+                                      {f.player1aName} & {f.player1bName}
+                                    </span>
+                                    <div className="flex flex-wrap gap-1 mt-0.5">
+                                      {playerL2Map[f.player1aId] && (
+                                        <span className="text-[9px] text-indigo-600/90 font-semibold truncate bg-indigo-50/50 px-1 py-0.25 rounded" title={playerL2Map[f.player1aId]}>
+                                          {playerL2Map[f.player1aId]}
+                                        </span>
+                                      )}
+                                      {playerL2Map[f.player1bId] && playerL2Map[f.player1bId] !== playerL2Map[f.player1aId] && (
+                                        <span className="text-[9px] text-indigo-600/90 font-semibold truncate bg-indigo-50/50 px-1 py-0.25 rounded" title={playerL2Map[f.player1bId]}>
+                                          {playerL2Map[f.player1bId]}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <span className="text-[9px] text-slate-400 uppercase tracking-widest font-extrabold shrink-0 mt-0.5">T1</span>
+                                </div>
 
-                            <div className="relative flex items-center justify-center py-0.5">
-                              <div className="absolute inset-0 flex items-center">
-                                <div className="w-full border-t border-slate-100/90"></div>
-                              </div>
-                              <span className="relative px-2 bg-white text-[9px] font-black text-indigo-500 bg-indigo-50 rounded-full border border-indigo-100/75 tracking-wider">
-                                VS
-                              </span>
-                            </div>
-
-                            <div className="flex items-start justify-between text-xs gap-2">
-                              <div className="flex flex-col min-w-0">
-                                <span className="font-black text-slate-800 truncate max-w-[130px]" title={f.player2Name}>
-                                  {f.player2Name}
-                                </span>
-                                {playerL2Map[f.player2Id] && (
-                                  <span className="text-[9px] text-indigo-600/90 font-semibold truncate mt-0.5 bg-indigo-50/50 px-1 py-0.25 rounded" title={`L2: ${playerL2Map[f.player2Id]}`}>
-                                    L2: {playerL2Map[f.player2Id]}
+                                <div className="relative flex items-center justify-center py-0.5">
+                                  <div className="absolute inset-0 flex items-center">
+                                    <div className="w-full border-t border-slate-100/90"></div>
+                                  </div>
+                                  <span className="relative px-2 bg-white text-[9px] font-black text-indigo-500 bg-indigo-50 rounded-full border border-indigo-100/75 tracking-wider">
+                                    VS
                                   </span>
-                                )}
-                              </div>
-                              <span className="text-[9px] text-slate-400 uppercase tracking-widest font-extrabold shrink-0 mt-0.5">P2</span>
-                            </div>
+                                </div>
+
+                                <div className="flex items-start justify-between text-xs gap-2">
+                                  <div className="flex flex-col min-w-0">
+                                    <span className="font-black text-slate-800 truncate" title={`${f.player2aName} & ${f.player2bName}`}>
+                                      {f.player2aName} & {f.player2bName}
+                                    </span>
+                                    <div className="flex flex-wrap gap-1 mt-0.5">
+                                      {playerL2Map[f.player2aId] && (
+                                        <span className="text-[9px] text-indigo-600/90 font-semibold truncate bg-indigo-50/50 px-1 py-0.25 rounded" title={playerL2Map[f.player2aId]}>
+                                          {playerL2Map[f.player2aId]}
+                                        </span>
+                                      )}
+                                      {playerL2Map[f.player2bId] && playerL2Map[f.player2bId] !== playerL2Map[f.player2aId] && (
+                                        <span className="text-[9px] text-indigo-600/90 font-semibold truncate bg-indigo-50/50 px-1 py-0.25 rounded" title={playerL2Map[f.player2bId]}>
+                                          {playerL2Map[f.player2bId]}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <span className="text-[9px] text-slate-400 uppercase tracking-widest font-extrabold shrink-0 mt-0.5">T2</span>
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="flex items-start justify-between text-xs gap-2">
+                                  <div className="flex flex-col min-w-0">
+                                    <span className="font-black text-slate-800 truncate max-w-[130px]" title={f.player1Name}>
+                                      {f.player1Name}
+                                    </span>
+                                    {playerL2Map[f.player1Id] && (
+                                      <span className="text-[9px] text-indigo-600/90 font-semibold truncate mt-0.5 bg-indigo-50/50 px-1 py-0.25 rounded" title={playerL2Map[f.player1Id]}>
+                                        {playerL2Map[f.player1Id]}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className="text-[9px] text-slate-400 uppercase tracking-widest font-extrabold shrink-0 mt-0.5">P1</span>
+                                </div>
+
+                                <div className="relative flex items-center justify-center py-0.5">
+                                  <div className="absolute inset-0 flex items-center">
+                                    <div className="w-full border-t border-slate-100/90"></div>
+                                  </div>
+                                  <span className="relative px-2 bg-white text-[9px] font-black text-indigo-500 bg-indigo-50 rounded-full border border-indigo-100/75 tracking-wider">
+                                    VS
+                                  </span>
+                                </div>
+
+                                <div className="flex items-start justify-between text-xs gap-2">
+                                  <div className="flex flex-col min-w-0">
+                                    <span className="font-black text-slate-800 truncate max-w-[130px]" title={f.player2Name}>
+                                      {f.player2Name}
+                                    </span>
+                                    {playerL2Map[f.player2Id] && (
+                                      <span className="text-[9px] text-indigo-600/90 font-semibold truncate mt-0.5 bg-indigo-50/50 px-1 py-0.25 rounded" title={playerL2Map[f.player2Id]}>
+                                        {playerL2Map[f.player2Id]}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className="text-[9px] text-slate-400 uppercase tracking-widest font-extrabold shrink-0 mt-0.5">P2</span>
+                                </div>
+                              </>
+                            )}
                           </div>
 
                           {/* Match Card Bottom */}
@@ -960,7 +1296,7 @@ export default function FixtureManager({
                 <h3 className="text-lg font-black text-slate-900">Delete Match Fixture?</h3>
               </div>
               <p className="text-sm text-slate-500 mb-6 leading-relaxed">
-                Are you sure you want to delete this match between <strong className="text-slate-800 font-bold">{fixtureToDelete.player1Name}</strong> and <strong className="text-slate-800 font-bold">{fixtureToDelete.player2Name}</strong>? This will also remove any score recorded for it and cannot be undone.
+                Are you sure you want to delete this match between <strong className="text-slate-800 font-bold">{fixtureToDelete.isDoubles ? `${fixtureToDelete.player1aName} & ${fixtureToDelete.player1bName}` : fixtureToDelete.player1Name}</strong> and <strong className="text-slate-800 font-bold">{fixtureToDelete.isDoubles ? `${fixtureToDelete.player2aName} & ${fixtureToDelete.player2bName}` : fixtureToDelete.player2Name}</strong>? This will also remove any score recorded for it and cannot be undone.
               </p>
               <div className="flex gap-3 justify-end">
                 <button 

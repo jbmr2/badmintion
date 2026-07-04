@@ -279,6 +279,17 @@ export default function RefereePanel({ tournamentId, userRole = 'user' }: Refere
     }
   };
 
+  // Helper to determine points delta based on matchType (League: 5 | QF: 10 | SF: 15 | Final: 25)
+  const getPointsDelta = (fixture?: any) => {
+    if (!fixture) return 5;
+    const t = fixture.matchType?.toLowerCase() || 'league';
+    if (t.includes('pre_quarter') || t.includes('pre-quarter') || t.includes('pre quarter')) return 5;
+    if (t.includes('quarter') || t.includes('quater')) return 10;
+    if (t.includes('semi')) return 15;
+    if (t.includes('final')) return 25;
+    return 5;
+  };
+
   // Reset current match state
   const resetMatch = async () => {
     if (!activeFixture) return;
@@ -290,8 +301,12 @@ export default function RefereePanel({ tournamentId, userRole = 'user' }: Refere
       // 1. Delete completed match record if exists
       const existingMatch = matches.find(m => m.fixtureId === activeFixture.id);
       if (existingMatch) {
-        const winnerPlayerId = existingMatch.winner === 'player1' ? activeFixture.player1Id : activeFixture.player2Id;
-        await adjustTeamPoints(winnerPlayerId, -5, activeFixture);
+        const isDoublesMatch = !!(activeFixture.isDoubles || activeFixture.player1aId || activeFixture.player1bId || activeFixture.player2aId || activeFixture.player2bId);
+        const winnerPlayerId = existingMatch.winner === 'player1' 
+          ? (isDoublesMatch ? activeFixture.player1aId : activeFixture.player1Id) 
+          : (isDoublesMatch ? activeFixture.player2aId : activeFixture.player2Id);
+        const pointsDelta = getPointsDelta(activeFixture);
+        await adjustTeamPoints(winnerPlayerId, -pointsDelta, activeFixture);
         await deleteDoc(doc(db, `tournaments/${tournamentId}/matches`, existingMatch.id));
       }
 
@@ -347,14 +362,21 @@ export default function RefereePanel({ tournamentId, userRole = 'user' }: Refere
 
     setSaving(true);
     try {
+      const isDoublesMatch = !!(activeFixture.isDoubles || activeFixture.player1aId || activeFixture.player1bId || activeFixture.player2aId || activeFixture.player2bId);
       const winner = p1Games > p2Games ? 'player1' : 'player2';
-      const winnerPlayerId = winner === 'player1' ? activeFixture.player1Id : activeFixture.player2Id;
+      const winnerPlayerId = winner === 'player1' 
+        ? (isDoublesMatch ? activeFixture.player1aId : activeFixture.player1Id) 
+        : (isDoublesMatch ? activeFixture.player2aId : activeFixture.player2Id);
+
+      const pointsDelta = getPointsDelta(activeFixture);
 
       // 1. Check existing match doc
       const existingMatch = matches.find(m => m.fixtureId === activeFixture.id);
       if (existingMatch) {
         const oldWinner = existingMatch.winner;
-        const oldWinnerPlayerId = oldWinner === 'player1' ? activeFixture.player1Id : activeFixture.player2Id;
+        const oldWinnerPlayerId = oldWinner === 'player1' 
+          ? (isDoublesMatch ? activeFixture.player1aId : activeFixture.player1Id) 
+          : (isDoublesMatch ? activeFixture.player2aId : activeFixture.player2Id);
 
         await updateDoc(doc(db, `tournaments/${tournamentId}/matches`, existingMatch.id), {
           scores: s,
@@ -366,8 +388,8 @@ export default function RefereePanel({ tournamentId, userRole = 'user' }: Refere
         });
 
         if (oldWinnerPlayerId !== winnerPlayerId) {
-          await adjustTeamPoints(oldWinnerPlayerId, -5, activeFixture);
-          await adjustTeamPoints(winnerPlayerId, 5, activeFixture);
+          await adjustTeamPoints(oldWinnerPlayerId, -pointsDelta, activeFixture);
+          await adjustTeamPoints(winnerPlayerId, pointsDelta, activeFixture);
         }
       } else {
         // Create new match doc
@@ -381,7 +403,7 @@ export default function RefereePanel({ tournamentId, userRole = 'user' }: Refere
           finalizedAt: Date.now()
         });
 
-        await adjustTeamPoints(winnerPlayerId, 5, activeFixture);
+        await adjustTeamPoints(winnerPlayerId, pointsDelta, activeFixture);
       }
 
       // 2. Update fixture
@@ -796,14 +818,6 @@ export default function RefereePanel({ tournamentId, userRole = 'user' }: Refere
                             >
                               <Minus className="w-4 h-4" />
                             </button>
-                            <button
-                              onClick={() => handleScoreChange(fieldName, 5)}
-                              disabled={!canScore}
-                              className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs font-bold transition disabled:opacity-50 disabled:cursor-not-allowed"
-                              title="Add 5 points"
-                            >
-                              +5
-                            </button>
                           </div>
                         </div>
                       </div>
@@ -852,14 +866,6 @@ export default function RefereePanel({ tournamentId, userRole = 'user' }: Refere
                               title="Subtract Point"
                             >
                               <Minus className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => handleScoreChange(fieldName, 5)}
-                              disabled={!canScore}
-                              className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs font-bold transition disabled:opacity-50 disabled:cursor-not-allowed"
-                              title="Add 5 points"
-                            >
-                              +5
                             </button>
                           </div>
                         </div>

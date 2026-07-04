@@ -196,7 +196,7 @@ export default function PlayerMatchesModal({
                 )}
                 {playerL2Map[playerId] && (
                   <span className="text-[10px] font-black text-indigo-700 bg-indigo-50 border border-indigo-150 px-2.5 py-0.5 rounded-full uppercase tracking-wider">
-                    L2: {playerL2Map[playerId]}
+                    {playerL2Map[playerId]}
                   </span>
                 )}
                 <span className="text-[10px] font-mono text-slate-400 font-bold bg-slate-50 border border-slate-150 px-2 py-0.5 rounded">

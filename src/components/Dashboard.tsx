@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { db } from '../lib/firebase';
 import { collection, query, onSnapshot, doc } from 'firebase/firestore';
 import { Users, Trophy, ClipboardList, Target, Medal, Activity, Shield, UserCheck, Code, QrCode } from 'lucide-react';
+import PlayerMobileSearch from './PlayerMobileSearch';
 import RecentMatches from './RecentMatches';
 import TournamentQRCodeModal from './TournamentQRCodeModal';
 
@@ -14,7 +15,9 @@ export default function Dashboard({
   onNavigate: (step: any) => void; 
   userRole?: 'admin' | 'scorer' | 'user'; 
 }) {
-  const [stats, setStats] = useState({ players: 0, completedMatches: 0, totalFixtures: 0 });
+  const [playersCount, setPlayersCount] = useState(0);
+  const [matches, setMatches] = useState<any[]>([]);
+  const [fixtures, setFixtures] = useState<any[]>([]);
   const [tournamentName, setTournamentName] = useState(tournamentId);
   const [showQR, setShowQR] = useState(false);
 
@@ -28,17 +31,17 @@ export default function Dashboard({
 
     const playersQuery = query(collection(db, `tournaments/${tournamentId}/players`));
     const unsubscribePlayers = onSnapshot(playersQuery, (snapshot) => {
-      setStats(prev => ({ ...prev, players: snapshot.size }));
+      setPlayersCount(snapshot.size);
     });
 
     const matchesQuery = query(collection(db, `tournaments/${tournamentId}/matches`));
     const unsubscribeMatches = onSnapshot(matchesQuery, (snapshot) => {
-      setStats(prev => ({ ...prev, completedMatches: snapshot.size }));
+      setMatches(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
     
     const fixturesQuery = query(collection(db, `tournaments/${tournamentId}/fixtures`));
     const unsubscribeFixtures = onSnapshot(fixturesQuery, (snapshot) => {
-      setStats(prev => ({ ...prev, totalFixtures: snapshot.size }));
+      setFixtures(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
 
     return () => {
@@ -48,6 +51,19 @@ export default function Dashboard({
       unsubscribeFixtures();
     };
   }, [tournamentId]);
+
+  const stats = useMemo(() => {
+    // Filter out any matches where the corresponding fixture has been deleted (safeguard)
+    const validMatchesCount = matches.filter(m => fixtures.some(f => f.id === m.fixtureId)).length;
+    // Also, count completed fixtures as double-check
+    const completedFixturesCount = fixtures.filter(f => f.status === 'completed').length;
+    
+    return {
+      players: playersCount,
+      completedMatches: Math.min(validMatchesCount, completedFixturesCount),
+      totalFixtures: fixtures.length
+    };
+  }, [playersCount, matches, fixtures]);
 
   const navItems = [
     { label: 'Manage Players', id: 'players', icon: Users },
@@ -100,54 +116,55 @@ export default function Dashboard({
         </div>
       </div>
       
-      <div className="grid grid-cols-3 gap-2.5 sm:gap-6">
-        <div className="bg-white p-3 sm:p-6 rounded-2xl shadow-xs border border-slate-100 flex items-center gap-2 sm:gap-4">
-          <div className="bg-indigo-100 p-2 sm:p-3 rounded-xl sm:rounded-full text-indigo-600 shrink-0">
-            <Users className="w-4 h-4 sm:w-6 sm:h-6" />
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
+        <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4 hover:border-indigo-100 transition-colors">
+          <div className="bg-indigo-50 p-3 rounded-2xl text-indigo-600 shrink-0">
+            <Users className="w-6 h-6" />
           </div>
-          <div className="min-w-0">
-            <p className="text-[10px] sm:text-sm text-slate-500 font-bold sm:font-medium uppercase sm:normal-case tracking-wider sm:tracking-normal truncate">Players</p>
-            <p className="text-base sm:text-2xl font-black sm:font-bold text-slate-900 mt-0.5 sm:mt-0">{stats.players}</p>
-          </div>
-        </div>
-        <div className="bg-white p-3 sm:p-6 rounded-2xl shadow-xs border border-slate-100 flex items-center gap-2 sm:gap-4">
-          <div className="bg-emerald-100 p-2 sm:p-3 rounded-xl sm:rounded-full text-emerald-600 shrink-0">
-            <Trophy className="w-4 h-4 sm:w-6 sm:h-6" />
-          </div>
-          <div className="min-w-0">
-            <p className="text-[10px] sm:text-sm text-slate-500 font-bold sm:font-medium uppercase sm:normal-case tracking-wider sm:tracking-normal truncate">Completed</p>
-            <p className="text-base sm:text-2xl font-black sm:font-bold text-slate-900 mt-0.5 sm:mt-0">{stats.completedMatches}</p>
+          <div>
+            <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">Total Players</p>
+            <p className="text-3xl font-black text-slate-900 mt-1">{stats.players}</p>
           </div>
         </div>
-        <div className="bg-white p-3 sm:p-6 rounded-2xl shadow-xs border border-slate-100 flex items-center gap-2 sm:gap-4">
-          <div className="bg-amber-100 p-2 sm:p-3 rounded-xl sm:rounded-full text-amber-600 shrink-0">
-            <Target className="w-4 h-4 sm:w-6 sm:h-6" />
+        <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4 hover:border-emerald-100 transition-colors">
+          <div className="bg-emerald-50 p-3 rounded-2xl text-emerald-600 shrink-0">
+            <Trophy className="w-6 h-6" />
           </div>
-          <div className="min-w-0">
-            <p className="text-[10px] sm:text-sm text-slate-500 font-bold sm:font-medium uppercase sm:normal-case tracking-wider sm:tracking-normal truncate">Progress</p>
-            <p className="text-base sm:text-2xl font-black sm:font-bold text-slate-900 mt-0.5 sm:mt-0">{stats.totalFixtures > 0 ? Math.round((stats.completedMatches / stats.totalFixtures) * 100) : 0}%</p>
+          <div>
+            <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">Completed Matches</p>
+            <p className="text-3xl font-black text-slate-900 mt-1">{stats.completedMatches}</p>
+          </div>
+        </div>
+        <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4 hover:border-amber-100 transition-colors">
+          <div className="bg-amber-50 p-3 rounded-2xl text-amber-600 shrink-0">
+            <Target className="w-6 h-6" />
+          </div>
+          <div>
+            <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">Progress</p>
+            <p className="text-3xl font-black text-slate-900 mt-1">{stats.totalFixtures > 0 ? Math.round((stats.completedMatches / stats.totalFixtures) * 100) : 0}%</p>
           </div>
         </div>
       </div>
       
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
         {/* Navigation Grid */}
-        <div className="lg:col-span-2 grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-6">
+        <div className="lg:col-span-2 grid grid-cols-2 sm:grid-cols-4 gap-4">
           {navItems.map(item => (
               <button 
                   key={item.id} 
                   onClick={() => onNavigate(item.id)} 
-                  className="flex flex-col items-center justify-center gap-1.5 sm:gap-3 p-3.5 sm:p-6 bg-white rounded-2xl shadow-xs sm:shadow-sm border border-slate-100 hover:border-indigo-200 hover:shadow-md transition-all group min-h-[96px] sm:min-h-0"
+                  className="flex flex-col items-center justify-center gap-3 p-5 bg-white rounded-3xl shadow-sm border border-slate-100 hover:border-indigo-200 hover:shadow-indigo-50/50 hover:shadow-lg transition-all group aspect-square"
               >
-                  <item.icon className="w-4 h-4 sm:w-6 sm:h-6 text-indigo-500 group-hover:scale-110 transition-transform shrink-0" />
-                  <span className="font-bold sm:font-semibold text-slate-700 text-[11px] sm:text-sm tracking-tight text-center break-words leading-tight whitespace-normal">{item.label}</span>
+                  <item.icon className="w-7 h-7 text-indigo-500 group-hover:scale-110 transition-transform shrink-0" />
+                  <span className="font-bold text-slate-700 text-xs tracking-tight text-center leading-tight">{item.label}</span>
               </button>
           ))}
         </div>
 
         {/* Recent Matches Sidebar Panel */}
-        <div className="lg:col-span-1">
+        <div className="lg:col-span-1 space-y-8">
           <RecentMatches tournamentId={tournamentId} />
+          <PlayerMobileSearch tournamentId={tournamentId} />
         </div>
       </div>
 

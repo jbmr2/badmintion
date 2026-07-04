@@ -330,7 +330,9 @@ export default function MatchScoreManager({
         // Only trigger if transitioning from active/incomplete to completed
         if (!wasFinished && isFinishedNow) {
           const setWinnerKey = p1New > p2New ? 'player1' : 'player2';
-          const setWinnerName = setWinnerKey === 'player1' ? fixture.player1Name : fixture.player2Name;
+          const setWinnerName = setWinnerKey === 'player1' 
+            ? (fixture.isDoubles ? (fixture.player1bName ? `${fixture.player1aName} & ${fixture.player1bName}` : fixture.player1aName) : fixture.player1Name)
+            : (fixture.isDoubles ? (fixture.player2bName ? `${fixture.player2aName} & ${fixture.player2bName}` : fixture.player2aName) : fixture.player2Name);
           const scoreStr = `${Math.max(p1New, p2New)} - ${Math.min(p1New, p2New)}`;
 
           // Calculate overall sets won to check if match is completed
@@ -347,7 +349,9 @@ export default function MatchScoreManager({
 
           const isMatchOver = p1Sets >= 2 || p2Sets >= 2;
           const matchWinnerKey = p1Sets >= 2 ? 'player1' : 'player2';
-          const matchWinnerName = matchWinnerKey === 'player1' ? fixture.player1Name : fixture.player2Name;
+          const matchWinnerName = matchWinnerKey === 'player1' 
+            ? (fixture.isDoubles ? (fixture.player1bName ? `${fixture.player1aName} & ${fixture.player1bName}` : fixture.player1aName) : fixture.player1Name)
+            : (fixture.isDoubles ? (fixture.player2bName ? `${fixture.player2aName} & ${fixture.player2bName}` : fixture.player2aName) : fixture.player2Name);
 
           setCompletedSetPopup({
             setIndex,
@@ -374,6 +378,17 @@ export default function MatchScoreManager({
     }
   };
 
+  // Helper to determine points delta based on matchType (League: 5 | QF: 10 | SF: 15 | Final: 25)
+  const getPointsDelta = (fixture?: any) => {
+    if (!fixture) return 5;
+    const t = fixture.matchType?.toLowerCase() || 'league';
+    if (t.includes('pre_quarter') || t.includes('pre-quarter') || t.includes('pre quarter')) return 5;
+    if (t.includes('quarter') || t.includes('quater')) return 10;
+    if (t.includes('semi')) return 15;
+    if (t.includes('final')) return 25;
+    return 5;
+  };
+
   // Reset a live match or completed match back to pending
   const resetMatch = async (fixtureId: string) => {
     if (saving) return;
@@ -387,9 +402,13 @@ export default function MatchScoreManager({
       if (existingMatch) {
         const fixture = fixtures.find(f => f.id === fixtureId);
         if (fixture) {
-          const winnerPlayerId = existingMatch.winner === 'player1' ? fixture.player1Id : fixture.player2Id;
+          const isDoublesMatch = !!(fixture.isDoubles || fixture.player1aId || fixture.player1bId || fixture.player2aId || fixture.player2bId);
+          const winnerPlayerId = existingMatch.winner === 'player1' 
+            ? (isDoublesMatch ? fixture.player1aId : fixture.player1Id) 
+            : (isDoublesMatch ? fixture.player2aId : fixture.player2Id);
           // Subtract winner's team points
-          await adjustTeamPoints(winnerPlayerId, -5, fixture);
+          const pointsDelta = getPointsDelta(fixture);
+          await adjustTeamPoints(winnerPlayerId, -pointsDelta, fixture);
         }
         // Delete match document
         await deleteDoc(doc(db, `tournaments/${tournamentId}/matches`, existingMatch.id));
@@ -429,14 +448,22 @@ export default function MatchScoreManager({
       const p1Games = (s.p1g1 > s.p2g1 ? 1 : 0) + (s.p1g2 > s.p2g2 ? 1 : 0) + (s.p1g3 > s.p2g3 ? 1 : 0);
       const p2Games = (s.p2g1 > s.p1g1 ? 1 : 0) + (s.p2g2 > s.p1g2 ? 1 : 0) + (s.p2g3 > s.p1g3 ? 1 : 0);
       const winner = p1Games > p2Games ? 'player1' : 'player2';
-      const winnerPlayerId = winner === 'player1' ? fixture.player1Id : fixture.player2Id;
+      
+      const isDoublesMatch = !!(fixture.isDoubles || fixture.player1aId || fixture.player1bId || fixture.player2aId || fixture.player2bId);
+      const winnerPlayerId = winner === 'player1' 
+        ? (isDoublesMatch ? fixture.player1aId : fixture.player1Id) 
+        : (isDoublesMatch ? fixture.player2aId : fixture.player2Id);
 
       // Check if there was an existing match document
       const existingMatch = matches.find(m => m.fixtureId === fixtureId);
       
+      const pointsDelta = getPointsDelta(fixture);
+
       if (existingMatch) {
         const oldWinner = existingMatch.winner;
-        const oldWinnerPlayerId = oldWinner === 'player1' ? fixture.player1Id : fixture.player2Id;
+        const oldWinnerPlayerId = oldWinner === 'player1' 
+          ? (isDoublesMatch ? fixture.player1aId : fixture.player1Id) 
+          : (isDoublesMatch ? fixture.player2aId : fixture.player2Id);
         
         // Update existing match document
         await updateDoc(doc(db, `tournaments/${tournamentId}/matches`, existingMatch.id), {
@@ -450,8 +477,8 @@ export default function MatchScoreManager({
 
         // Adjust team standings if winner changed
         if (oldWinnerPlayerId !== winnerPlayerId) {
-          await adjustTeamPoints(oldWinnerPlayerId, -5, fixture);
-          await adjustTeamPoints(winnerPlayerId, 5, fixture);
+          await adjustTeamPoints(oldWinnerPlayerId, -pointsDelta, fixture);
+          await adjustTeamPoints(winnerPlayerId, pointsDelta, fixture);
         }
       } else {
         // Create new match document
@@ -465,8 +492,8 @@ export default function MatchScoreManager({
           finalizedAt: Date.now()
         });
 
-        // Add 5 points to winning team
-        await adjustTeamPoints(winnerPlayerId, 5, fixture);
+        // Add points to winning team
+        await adjustTeamPoints(winnerPlayerId, pointsDelta, fixture);
       }
 
       // Update fixture status to completed
@@ -701,6 +728,13 @@ export default function MatchScoreManager({
                   statusBg = 'bg-amber-50 text-amber-700';
                 }
 
+                const p1DisplayName = f.isDoubles
+                  ? (f.player1bName ? `${f.player1aName} & ${f.player1bName}` : f.player1aName)
+                  : f.player1Name;
+                const p2DisplayName = f.isDoubles
+                  ? (f.player2bName ? `${f.player2aName} & ${f.player2bName}` : f.player2aName)
+                  : f.player2Name;
+
                 return (
                   <div 
                     key={f.id} 
@@ -743,13 +777,28 @@ export default function MatchScoreManager({
                       {/* Player 1 Row */}
                       <div className="flex justify-between items-start gap-2">
                         <div className="flex flex-col min-w-0 flex-1">
-                          <span className={`text-xs font-black truncate max-w-[140px] ${status === 'completed' && matchResult?.winner === 'player2' ? 'text-slate-400 font-normal line-through' : 'text-slate-800'}`} title={f.player1Name}>
-                            {f.player1Name}
+                          <span className={`text-xs font-black truncate max-w-[140px] ${status === 'completed' && matchResult?.winner === 'player2' ? 'text-slate-400 font-normal line-through' : 'text-slate-800'}`} title={p1DisplayName}>
+                            {p1DisplayName}
                           </span>
-                          {playerL2Map[f.player1Id] && (
-                            <span className="text-[9px] text-indigo-600/90 font-semibold truncate mt-0.5 bg-indigo-50/50 px-1 py-0.25 rounded self-start" title={`L2: ${playerL2Map[f.player1Id]}`}>
-                              L2: {playerL2Map[f.player1Id]}
-                            </span>
+                          {f.isDoubles ? (
+                            <div className="flex flex-wrap gap-1 mt-0.5">
+                              {playerL2Map[f.player1aId] && (
+                                <span className="text-[9px] text-indigo-600/90 font-semibold truncate bg-indigo-50/50 px-1 py-0.25 rounded self-start" title={playerL2Map[f.player1aId]}>
+                                  {playerL2Map[f.player1aId]}
+                                </span>
+                              )}
+                              {playerL2Map[f.player1bId] && playerL2Map[f.player1bId] !== playerL2Map[f.player1aId] && (
+                                <span className="text-[9px] text-indigo-600/90 font-semibold truncate bg-indigo-50/50 px-1 py-0.25 rounded self-start" title={playerL2Map[f.player1bId]}>
+                                  {playerL2Map[f.player1bId]}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            playerL2Map[f.player1Id] && (
+                              <span className="text-[9px] text-indigo-600/90 font-semibold truncate mt-0.5 bg-indigo-50/50 px-1 py-0.25 rounded self-start" title={playerL2Map[f.player1Id]}>
+                                {playerL2Map[f.player1Id]}
+                              </span>
+                            )
                           )}
                         </div>
                         {/* Scores displays */}
@@ -782,13 +831,28 @@ export default function MatchScoreManager({
                       {/* Player 2 Row */}
                       <div className="flex justify-between items-start gap-2">
                         <div className="flex flex-col min-w-0 flex-1">
-                          <span className={`text-xs font-black truncate max-w-[140px] ${status === 'completed' && matchResult?.winner === 'player1' ? 'text-slate-400 font-normal line-through' : 'text-slate-800'}`} title={f.player2Name}>
-                            {f.player2Name}
+                          <span className={`text-xs font-black truncate max-w-[140px] ${status === 'completed' && matchResult?.winner === 'player1' ? 'text-slate-400 font-normal line-through' : 'text-slate-800'}`} title={p2DisplayName}>
+                            {p2DisplayName}
                           </span>
-                          {playerL2Map[f.player2Id] && (
-                            <span className="text-[9px] text-indigo-600/90 font-semibold truncate mt-0.5 bg-indigo-50/50 px-1 py-0.25 rounded self-start" title={`L2: ${playerL2Map[f.player2Id]}`}>
-                              L2: {playerL2Map[f.player2Id]}
-                            </span>
+                          {f.isDoubles ? (
+                            <div className="flex flex-wrap gap-1 mt-0.5">
+                              {playerL2Map[f.player2aId] && (
+                                <span className="text-[9px] text-indigo-600/90 font-semibold truncate bg-indigo-50/50 px-1 py-0.25 rounded self-start" title={playerL2Map[f.player2aId]}>
+                                  {playerL2Map[f.player2aId]}
+                                </span>
+                              )}
+                              {playerL2Map[f.player2bId] && playerL2Map[f.player2bId] !== playerL2Map[f.player2aId] && (
+                                <span className="text-[9px] text-indigo-600/90 font-semibold truncate bg-indigo-50/50 px-1 py-0.25 rounded self-start" title={playerL2Map[f.player2bId]}>
+                                  {playerL2Map[f.player2bId]}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            playerL2Map[f.player2Id] && (
+                              <span className="text-[9px] text-indigo-600/90 font-semibold truncate mt-0.5 bg-indigo-50/50 px-1 py-0.25 rounded self-start" title={playerL2Map[f.player2Id]}>
+                                {playerL2Map[f.player2Id]}
+                              </span>
+                            )
                           )}
                         </div>
                         {/* Scores displays */}
@@ -948,7 +1012,7 @@ export default function MatchScoreManager({
                   {activeFixture?.groupName || "Main Event"}
                 </span>
                 <p className="font-extrabold text-lg text-slate-800 tracking-tight mt-1">
-                  {activeFixture?.player1Name} <span className="text-slate-400 font-medium text-sm mx-1">VS</span> {activeFixture?.player2Name}
+                  {activeFixture?.isDoubles ? (activeFixture.player1bName ? `${activeFixture.player1aName} & ${activeFixture.player1bName}` : activeFixture.player1aName) : activeFixture?.player1Name} <span className="text-slate-400 font-medium text-sm mx-1">VS</span> {activeFixture?.isDoubles ? (activeFixture.player2bName ? `${activeFixture.player2aName} & ${activeFixture.player2bName}` : activeFixture.player2aName) : activeFixture?.player2Name}
                 </p>
               </div>
               <div className="text-left sm:text-right">
@@ -1064,8 +1128,20 @@ export default function MatchScoreManager({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* Left & Right Player Blocks, taking swap into account */}
               {[
-                { playerKey: 'player1' as const, name: activeFixture?.player1Name, label: "Player 1" },
-                { playerKey: 'player2' as const, name: activeFixture?.player2Name, label: "Player 2" }
+                { 
+                  playerKey: 'player1' as const, 
+                  name: activeFixture?.isDoubles 
+                    ? (activeFixture.player1bName ? `${activeFixture.player1aName} & ${activeFixture.player1bName}` : activeFixture.player1aName) 
+                    : activeFixture?.player1Name, 
+                  label: activeFixture?.isDoubles ? "Team 1" : "Player 1" 
+                },
+                { 
+                  playerKey: 'player2' as const, 
+                  name: activeFixture?.isDoubles 
+                    ? (activeFixture.player2bName ? `${activeFixture.player2aName} & ${activeFixture.player2bName}` : activeFixture.player2aName) 
+                    : activeFixture?.player2Name, 
+                  label: activeFixture?.isDoubles ? "Team 2" : "Player 2" 
+                }
               ].map((p, idx, arr) => {
                 // Determine actual index after court swap state
                 const actualIndex = isSwapped ? (idx === 0 ? 1 : 0) : idx;
@@ -1199,7 +1275,11 @@ export default function MatchScoreManager({
                 <tbody className="divide-y divide-slate-800 text-xs font-semibold">
                   {/* Player 1 Row */}
                   <tr className="hover:bg-slate-800/20">
-                    <td className="py-3 font-extrabold max-w-[150px] truncate">{activeFixture?.player1Name}</td>
+                    <td className="py-3 font-extrabold max-w-[150px] truncate">
+                      {activeFixture?.isDoubles 
+                        ? (activeFixture.player1bName ? `${activeFixture.player1aName} & ${activeFixture.player1bName}` : activeFixture.player1aName) 
+                        : activeFixture?.player1Name}
+                    </td>
                     {[1, 2, 3].map(num => {
                       const p1 = scores[activeFixture.id]?.[`p1g${num}`] || 0;
                       const p2 = scores[activeFixture.id]?.[`p2g${num}`] || 0;
@@ -1225,7 +1305,11 @@ export default function MatchScoreManager({
 
                   {/* Player 2 Row */}
                   <tr className="hover:bg-slate-800/20">
-                    <td className="py-3 font-extrabold max-w-[150px] truncate">{activeFixture?.player2Name}</td>
+                    <td className="py-3 font-extrabold max-w-[150px] truncate">
+                      {activeFixture?.isDoubles 
+                        ? (activeFixture.player2bName ? `${activeFixture.player2aName} & ${activeFixture.player2bName}` : activeFixture.player2aName) 
+                        : activeFixture?.player2Name}
+                    </td>
                     {[1, 2, 3].map(num => {
                       const p1 = scores[activeFixture.id]?.[`p1g${num}`] || 0;
                       const p2 = scores[activeFixture.id]?.[`p2g${num}`] || 0;

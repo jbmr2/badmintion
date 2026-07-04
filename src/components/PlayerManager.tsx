@@ -52,13 +52,25 @@ export default function PlayerManager({
   const [selectedChapterId, setSelectedChapterId] = useState<string>('');
   const [selectedGroupId, setSelectedGroupId] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [showUnlinkedOnly, setShowUnlinkedOnly] = useState(false);
+  const [isDoublesImport, setIsDoublesImport] = useState(false);
+  const [partnerName, setPartnerName] = useState('');
+  const [partnerMobile, setPartnerMobile] = useState('');
+  const [isDoublesMode, setIsDoublesMode] = useState(false);
+  const [linkWithGlobal, setLinkWithGlobal] = useState(true);
+  const [partnerPlayer, setPartnerPlayer] = useState<{ id: string; name: string } | null>(null);
   
   // Bulk import states
-  const [importMode, setImportMode] = useState<'single' | 'bulk'>('single');
+  const [importMode, setImportMode] = useState<'single' | 'bulk' | 'pairs'>('single');
   const [bulkText, setBulkText] = useState('');
   const [parsedPlayers, setParsedPlayers] = useState<any[]>([]);
   const [isImporting, setIsImporting] = useState(false);
   const [importProgress, setImportProgress] = useState(0);
+
+  // Pair Binder states
+  const [binderPlayer1Id, setBinderPlayer1Id] = useState('');
+  const [binderPlayer2Id, setBinderPlayer2Id] = useState('');
+  const [isBinding, setIsBinding] = useState(false);
 
   // Master profile lookup states
   const [isSearchingMobile, setIsSearchingMobile] = useState(false);
@@ -115,6 +127,10 @@ export default function PlayerManager({
     }
 
     const delayDebounce = setTimeout(async () => {
+      if (!linkWithGlobal) {
+        setMatchedMasterProfile(null);
+        return;
+      }
       setIsSearchingMobile(true);
       try {
         const docRef = doc(db, 'players', cleaned);
@@ -154,7 +170,7 @@ export default function PlayerManager({
     }, 450);
 
     return () => clearTimeout(delayDebounce);
-  }, [player.mobile]);
+  }, [player.mobile, linkWithGlobal]);
 
   // 1b. Fetch Groups list
   useEffect(() => {
@@ -292,65 +308,73 @@ export default function PlayerManager({
     }
 
     try {
-      // Generate standard ID
-      const playersCol = collection(db, `tournaments/${tournamentId}/players`);
-      const newPlayerRef = doc(playersCol);
-      const newId = newPlayerRef.id;
+      // Helper to add a player
+      const addPlayerToDb = async (pName: string, pAge: string, pMobile: string, pairId?: string) => {
+        const pMobileTrimmed = pMobile.trim();
+        const playersCol = collection(db, `tournaments/${tournamentId}/players`);
+        const pRef = doc(playersCol);
+        const pId = pRef.id;
 
-      const playerData = {
-        name: player.name.trim(),
-        age: player.age ? Number(player.age) : '',
-        mobile: mobileTrimmed,
-        createdAt: new Date().toISOString()
+        await setDoc(pRef, {
+          name: pName.trim(),
+          age: pAge ? Number(pAge) : '',
+          mobile: pMobileTrimmed,
+          pairId: pairId || null,
+          createdAt: new Date().toISOString()
+        });
+
+        const globalPlayerRef = doc(db, 'players', pMobileTrimmed);
+        await setDoc(globalPlayerRef, {
+          name: pName.trim(),
+          age: pAge ? Number(pAge) : '',
+          mobile: pMobileTrimmed,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+
+        return { id: pId, name: pName.trim(), pairId: pairId || null };
       };
 
-      // Set main player
-      await setDoc(newPlayerRef, playerData);
+      const pairId = isDoublesMode ? `pair_${Date.now()}` : undefined;
+      const player1 = await addPlayerToDb(player.name, player.age, mobileTrimmed, pairId);
+      let playersAdded = [player1];
 
-      // Sync to global master players registry (keyed by mobile)
-      const globalPlayerRef = doc(db, 'players', mobileTrimmed);
-      let globalL2 = "";
-      if (selectedChapterId) {
-        const chapter = allRootsLevel2.find(c => c.id === selectedChapterId);
-        if (chapter) {
-          globalL2 = chapter.name;
+      if (isDoublesMode) {
+        if (!partnerName.trim() || !partnerMobile.trim()) {
+           alert("Partner details are required for doubles registration.");
+           return;
         }
+        const player2 = await addPlayerToDb(partnerName, '', partnerMobile, pairId);
+        playersAdded.push(player2);
       }
 
-      await setDoc(globalPlayerRef, {
-        name: playerData.name,
-        age: playerData.age,
-        mobile: playerData.mobile,
-        ...(globalL2 ? { l2: globalL2 } : {}),
-        updatedAt: new Date().toISOString()
-      }, { merge: true });
-
-      // If chapter assignment selected
-      if (selectedChapterId) {
-        const chapter = allRootsLevel2.find(c => c.id === selectedChapterId);
-        if (chapter) {
-          const rosterRef = doc(db, `tournaments/${tournamentId}/roots/${chapter.rootId}/level1/${chapter.level1Id}/level2/${chapter.id}/players`, newId);
-          await setDoc(rosterRef, {
-            name: playerData.name,
-            age: playerData.age,
-            mobile: playerData.mobile,
-            assignedAt: new Date().toISOString()
-          });
-        }
-      }
-
-      // If group assignment selected
+      // Assign to group
       if (selectedGroupId) {
         const targetGroup = groups.find(g => g.id === selectedGroupId);
         if (targetGroup) {
-          const updatedPlayerIds = [...(targetGroup.playerIds || []), newId];
+          const updatedPlayerIds = [...(targetGroup.playerIds || []), ...playersAdded.map(p => p.id)];
           await updateDoc(doc(db, `tournaments/${tournamentId}/groups`, targetGroup.id), {
             playerIds: updatedPlayerIds
           });
         }
       }
 
+      // Assign to chapter (L2)
+      if (selectedChapterId) {
+        const chapter = allRootsLevel2.find(c => c.id === selectedChapterId);
+        if (chapter) {
+          for (const p of playersAdded) {
+            const newRosterRef = doc(db, `tournaments/${tournamentId}/roots/${chapter.rootId}/level1/${chapter.level1Id}/level2/${chapter.id}/players`, p.id);
+            await setDoc(newRosterRef, {
+              name: p.name,
+              assignedAt: new Date().toISOString()
+            });
+          }
+        }
+      }
+
       setPlayer({ name: '', age: '', mobile: '' });
+      setPartnerName('');
+      setPartnerMobile('');
       setSelectedChapterId('');
       setSelectedGroupId('');
       setMatchedMasterProfile(null);
@@ -385,6 +409,54 @@ export default function PlayerManager({
     } catch (err: any) {
       console.error(err);
       alert("Failed to delete player: " + err?.message);
+    }
+  };
+
+  // Manual Pair Binder handlers
+  const handleBindPair = async () => {
+    if (!binderPlayer1Id || !binderPlayer2Id) {
+      alert("Please select both players to create a pair.");
+      return;
+    }
+    if (binderPlayer1Id === binderPlayer2Id) {
+      alert("You cannot pair a player with themselves.");
+      return;
+    }
+
+    setIsBinding(true);
+    try {
+      const generatedPairId = `pair_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+      
+      const p1Ref = doc(db, `tournaments/${tournamentId}/players`, binderPlayer1Id);
+      const p2Ref = doc(db, `tournaments/${tournamentId}/players`, binderPlayer2Id);
+
+      await updateDoc(p1Ref, { pairId: generatedPairId });
+      await updateDoc(p2Ref, { pairId: generatedPairId });
+
+      setBinderPlayer1Id('');
+      setBinderPlayer2Id('');
+      alert("Success! Players successfully linked as a doubles pair.");
+    } catch (err: any) {
+      console.error(err);
+      alert("Failed to bind pair: " + err?.message);
+    } finally {
+      setIsBinding(false);
+    }
+  };
+
+  const handleUnlinkPair = async (pairId: string) => {
+    if (!window.confirm("Are you sure you want to unlink this pair? Both players will become individual entries.")) {
+      return;
+    }
+    try {
+      const paired = players.filter(p => p.pairId === pairId);
+      for (const p of paired) {
+        await updateDoc(doc(db, `tournaments/${tournamentId}/players`, p.id), { pairId: null });
+      }
+      alert("Success! Players successfully unlinked.");
+    } catch (err: any) {
+      console.error(err);
+      alert("Failed to unlink pair: " + err?.message);
     }
   };
 
@@ -521,9 +593,13 @@ export default function PlayerManager({
   const filteredPlayersList = players.filter(p => {
     const q = searchQuery.toLowerCase();
     const assignedGroup = groups.find(g => g.playerIds?.includes(p.id));
+    const assignment = allRootsPlayers.find(ap => ap.id === p.id);
+    const l2Name = assignment ? assignment.level2Name?.toLowerCase() : '';
+    
     return p.name.toLowerCase().includes(q) || 
            (p.mobile && p.mobile.toLowerCase().includes(q)) ||
-           (assignedGroup && assignedGroup.name.toLowerCase().includes(q));
+           (assignedGroup && assignedGroup.name.toLowerCase().includes(q)) ||
+           (l2Name && l2Name.includes(q));
   });
 
   // Sort chapters for dropdown selection
@@ -648,10 +724,117 @@ export default function PlayerManager({
 
       if (cleanCols.length === 0 || cleanCols.every(c => !c)) continue;
 
+      const createPlayerEntry = (name: string, age: string, mobile: string, originalGroup: string, pairTeam: string = "", pairId?: string) => {
+        const mobileCleanedInput = mobile.replace(/[^0-9+]/g, '').trim();
+        let mobileCleaned = mobileCleanedInput;
+        let nameTrimmed = name.trim();
+
+        // Check master global registry for automatic lookup & auto-fill!
+        let isAutoFilledFromGlobal = false;
+        let matchedGlobalL2Name = "";
+        
+        // 1. Try lookup by mobile first
+        let matchedMaster = null;
+        if (mobileCleaned) {
+          matchedMaster = masterRegistry.find(mr => mr.mobile === mobileCleaned || mr.id === mobileCleaned);
+        }
+        // 2. Try lookup by name if lookup by mobile failed or is not possible
+        if (!matchedMaster && nameTrimmed) {
+          matchedMaster = masterRegistry.find(mr => mr.name && mr.name.toLowerCase() === nameTrimmed.toLowerCase());
+        }
+        
+        if (matchedMaster) {
+          if (!nameTrimmed && matchedMaster.name) {
+            nameTrimmed = matchedMaster.name;
+            isAutoFilledFromGlobal = true;
+          }
+          if (!mobileCleaned && matchedMaster.mobile) {
+            mobileCleaned = matchedMaster.mobile;
+            isAutoFilledFromGlobal = true;
+          }
+          if ((!age || age.trim() === '' || age.trim() === 'undefined' || age.trim() === 'null') && matchedMaster.age !== undefined && matchedMaster.age !== null) {
+            age = String(matchedMaster.age);
+            isAutoFilledFromGlobal = true;
+          }
+          if (matchedMaster.l2) {
+            matchedGlobalL2Name = matchedMaster.l2;
+          }
+        }
+
+        // Row-level validation
+        let isValid = true;
+        let errorMsg = "";
+
+        if (!nameTrimmed) {
+          isValid = false;
+          errorMsg = "Name is required.";
+        } else if (!mobileCleaned && !isDoublesImport) {
+          isValid = false;
+          errorMsg = "Mobile number is required.";
+        } else if (seenMobilesInPasted.has(mobileCleaned) && mobileCleaned) {
+          isValid = false;
+          errorMsg = "Duplicate phone number in pasted list.";
+        } else if (!isDoublesImport) {
+          const isDbDuplicate = players.some(p => p.mobile && p.mobile.trim() === mobileCleaned);
+          if (isDbDuplicate) {
+            isValid = false;
+            errorMsg = "Phone number already exists in database.";
+          }
+        }
+
+        if (mobileCleaned) {
+          seenMobilesInPasted.add(mobileCleaned);
+        }
+
+        // Auto-fuzzy match group
+        const matchedGroupId = matchGroup(originalGroup);
+
+        // Auto-fuzzy match chapter from global registry
+        let matchedChapterId = "";
+        let matchedChapterName = "";
+        if (matchedGlobalL2Name) {
+          const chapter = allRootsLevel2.find(c => c.name.toLowerCase() === matchedGlobalL2Name.toLowerCase());
+          if (chapter) {
+            matchedChapterId = chapter.id;
+            matchedChapterName = chapter.name;
+          }
+        }
+
+        return {
+          tempId: `parsed-${Date.now()}-${Math.random()}`,
+          name: nameTrimmed,
+          age: age ? String(Number(age) || '') : '',
+          mobile: mobileCleaned,
+          originalGroup: originalGroup,
+          pairTeam: pairTeam,
+          matchedGroupId,
+          matchedChapterId,
+          matchedChapterName,
+          isValid,
+          errorMsg,
+          isAutoFilledFromGlobal,
+          pairId: pairId || null
+        };
+      };
+      
       let name = "";
       let age = "";
       let mobile = "";
       let originalGroup = "";
+
+      if (isDoublesImport) {
+        // Doubles format: Name1 [sep] Name2 [sep] TeamName
+        const name1 = cleanCols[0] || "";
+        const name2 = cleanCols[1] || "";
+        originalGroup = cleanCols[2] || "";
+        const importPairId = `pair_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+
+        // Add Player 1
+        result.push(createPlayerEntry(name1, "", "", originalGroup, originalGroup, importPairId));
+        // Add Player 2
+        result.push(createPlayerEntry(name2, "", "", originalGroup, originalGroup, importPairId));
+        continue;
+      }
 
       if (isFirstLineHeader) {
         const headers = lines[0].toLowerCase().split(/\t|,|;/).map(h => h.trim().replace(/"/g, ''));
@@ -674,25 +857,39 @@ export default function PlayerManager({
         originalGroup = cleanCols[3] || "";
       }
 
-      const mobileCleaned = mobile.replace(/[^0-9+]/g, '').trim();
+      const mobileCleanedInput = mobile.replace(/[^0-9+]/g, '').trim();
+      let mobileCleaned = mobileCleanedInput;
+      let nameTrimmed = name.trim();
 
       // Check master global registry for automatic lookup & auto-fill!
       let isAutoFilledFromGlobal = false;
       let matchedGlobalL2Name = "";
+      
+      // 1. Try lookup by mobile first
+      let matchedMaster = null;
       if (mobileCleaned) {
-        const matchedMaster = masterRegistry.find(mr => mr.mobile === mobileCleaned || mr.id === mobileCleaned);
-        if (matchedMaster) {
-          if (!name.trim() && matchedMaster.name) {
-            name = matchedMaster.name;
-            isAutoFilledFromGlobal = true;
-          }
-          if (!age.trim() && matchedMaster.age !== undefined && matchedMaster.age !== null) {
-            age = String(matchedMaster.age);
-            isAutoFilledFromGlobal = true;
-          }
-          if (matchedMaster.l2) {
-            matchedGlobalL2Name = matchedMaster.l2;
-          }
+        matchedMaster = masterRegistry.find(mr => mr.mobile === mobileCleaned || mr.id === mobileCleaned);
+      }
+      // 2. Try lookup by name if lookup by mobile failed or is not possible
+      if (!matchedMaster && nameTrimmed) {
+        matchedMaster = masterRegistry.find(mr => mr.name && mr.name.toLowerCase() === nameTrimmed.toLowerCase());
+      }
+      
+      if (matchedMaster) {
+        if (!nameTrimmed && matchedMaster.name) {
+          nameTrimmed = matchedMaster.name;
+          isAutoFilledFromGlobal = true;
+        }
+        if (!mobileCleaned && matchedMaster.mobile) {
+          mobileCleaned = matchedMaster.mobile;
+          isAutoFilledFromGlobal = true;
+        }
+        if ((!age || age.trim() === '' || age.trim() === 'undefined' || age.trim() === 'null') && matchedMaster.age !== undefined && matchedMaster.age !== null) {
+          age = String(matchedMaster.age);
+          isAutoFilledFromGlobal = true;
+        }
+        if (matchedMaster.l2) {
+          matchedGlobalL2Name = matchedMaster.l2;
         }
       }
 
@@ -700,7 +897,7 @@ export default function PlayerManager({
       let isValid = true;
       let errorMsg = "";
 
-      if (!name.trim()) {
+      if (!nameTrimmed) {
         isValid = false;
         errorMsg = "Name is required.";
       } else if (!mobileCleaned) {
@@ -737,7 +934,7 @@ export default function PlayerManager({
 
       result.push({
         tempId: `parsed-${i}-${Date.now()}`,
-        name: name.trim(),
+        name: nameTrimmed,
         age: age ? String(Number(age) || '') : '',
         mobile: mobileCleaned,
         originalGroup: originalGroup,
@@ -753,6 +950,17 @@ export default function PlayerManager({
     if (result.length === 0) {
       alert("Could not extract any rows from pasted text. Please verify formatting.");
       return;
+    }
+
+    const seenMobiles = new Set();
+    const hasDuplicates = result.some(p => {
+      if (p.mobile && seenMobiles.has(p.mobile)) return true;
+      if (p.mobile) seenMobiles.add(p.mobile);
+      return false;
+    });
+
+    if (hasDuplicates) {
+      alert("Duplicate players detected in the pasted list.");
     }
 
     setParsedPlayers(result);
@@ -806,24 +1014,30 @@ export default function PlayerManager({
         const newPlayerRef = doc(playersCol);
         const newId = newPlayerRef.id;
 
-        const playerProfile = {
+        const playerProfile: any = {
           name: pData.name,
           age: pData.age ? Number(pData.age) : '',
           mobile: pData.mobile,
           createdAt: new Date().toISOString()
         };
 
+        if (pData.pairId) {
+          playerProfile.pairId = pData.pairId;
+        }
+
         // Create player profile
         await setDoc(newPlayerRef, playerProfile);
 
         // Sync to global master players registry (keyed by mobile)
-        const globalPlayerRef = doc(db, 'players', playerProfile.mobile);
-        await setDoc(globalPlayerRef, {
-          name: playerProfile.name,
-          age: playerProfile.age,
-          mobile: playerProfile.mobile,
-          updatedAt: new Date().toISOString()
-        }, { merge: true });
+        if (playerProfile.mobile) {
+          const globalPlayerRef = doc(db, 'players', playerProfile.mobile);
+          await setDoc(globalPlayerRef, {
+            name: playerProfile.name,
+            age: playerProfile.age,
+            mobile: playerProfile.mobile,
+            updatedAt: new Date().toISOString()
+          }, { merge: true });
+        }
 
         // Nested Chapter L2 Assignment
         if (pData.chapterId) {
@@ -906,7 +1120,7 @@ export default function PlayerManager({
           <p className="text-slate-500 text-sm font-medium mt-0.5">Add, edit, delete, and directly assign players to Chapters (Level 2 rosters).</p>
         </div>
         
-        {/* Toggle between Single and Bulk Excel Imports - Admin only */}
+        {/* Toggle between Single, Pairs, and Bulk Excel Imports - Admin only */}
         {isAdmin && (
           <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200/60 self-stretch sm:self-auto">
             <button
@@ -920,7 +1134,17 @@ export default function PlayerManager({
               Single Profile
             </button>
             <button
-              onClick={() => setImportMode('bulk')}
+              onClick={() => { setImportMode('pairs'); setParsedPlayers([]); }}
+              className={`flex-1 sm:flex-none px-4 py-2 text-xs font-black uppercase tracking-wider rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+                importMode === 'pairs'
+                  ? 'bg-white text-indigo-700 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <Users className="w-3.5 h-3.5 text-indigo-600" /> Manual Pair Binder
+            </button>
+            <button
+              onClick={() => { setImportMode('bulk'); setParsedPlayers([]); }}
               className={`flex-1 sm:flex-none px-4 py-2 text-xs font-black uppercase tracking-wider rounded-lg transition-all flex items-center justify-center gap-1.5 ${
                 importMode === 'bulk'
                   ? 'bg-white text-indigo-700 shadow-sm'
@@ -942,14 +1166,24 @@ export default function PlayerManager({
       {/* -------------------- SINGLE PLAYER FORM (Admin only) -------------------- */}
       {isAdmin && importMode === 'single' && (
         <div className="p-5 bg-slate-50/70 border border-slate-100 rounded-2xl space-y-4">
-          <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
-            <Sparkles className="w-4 h-4 text-indigo-500" /> Add New Player Profile
+          <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5 justify-between">
+            <span className="flex items-center gap-1.5"><Sparkles className="w-4 h-4 text-indigo-500" /> Add New Player Profile</span>
+            <div className="flex items-center gap-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={linkWithGlobal} onChange={(e) => setLinkWithGlobal(e.target.checked)} />
+                Link with Global Registry
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={isDoublesMode} onChange={(e) => setIsDoublesMode(e.target.checked)} />
+                Doubles Registration
+              </label>
+            </div>
           </h3>
           
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 items-end">
-            {/* Name input */}
-            <div className="space-y-1">
-              <label className="text-xs font-bold text-slate-500">Player Name</label>
+            {/* Primary Player */}
+            <div className="space-y-1 md:col-span-2">
+              <label className="text-xs font-bold text-slate-500">{isDoublesMode ? 'Primary Player Name' : 'Player Name'}</label>
               <input 
                 value={player.name} 
                 onChange={(e) => setPlayer({...player, name: e.target.value})} 
@@ -957,51 +1191,42 @@ export default function PlayerManager({
                 placeholder="e.g. John Doe" 
               />
             </div>
-
-            {/* Mobile input with Master Registry lookup integration */}
+            
             <div className="space-y-1">
-              <label className="text-xs font-bold text-slate-500 flex items-center justify-between gap-1">
-                <span className="flex items-center gap-1">
-                  <Phone className="w-3.5 h-3.5 text-indigo-500" /> Mobile (Unique ID)
-                </span>
-              </label>
-              <div className="relative">
-                <input 
-                  value={player.mobile} 
-                  onChange={(e) => setPlayer({...player, mobile: e.target.value})} 
-                  className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition pr-8" 
-                  placeholder="e.g. 9876543210" 
-                  type="tel"
-                />
-                {isSearchingMobile && (
-                  <div className="absolute right-3 top-3">
-                    <RefreshCw className="w-4 h-4 text-slate-400 animate-spin" />
-                  </div>
-                )}
-              </div>
-              <div className="min-h-[18px] flex flex-wrap gap-1 mt-1">
-                {isSearchingMobile && (
-                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-500 animate-pulse">
-                    🔍 Looking up master registry...
-                  </span>
-                )}
-                {!isSearchingMobile && matchedMasterProfile && (
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-100 text-[10px] font-extrabold animate-fade-in">
-                    👤 Profile Found: {matchedMasterProfile.name} ({matchedMasterProfile.age || 'No Age'})
-                  </span>
-                )}
-                {!isSearchingMobile && player.mobile.trim().replace(/[^0-9+]/g, '').length >= 5 && !matchedMasterProfile && (
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-100 text-[10px] font-extrabold animate-fade-in">
-                    🆕 New profile (will register globally)
-                  </span>
-                )}
-                {!isSearchingMobile && player.mobile.trim().replace(/[^0-9+]/g, '').length >= 5 && players.some(p => p.mobile && p.mobile.trim().replace(/[^0-9+]/g, '') === player.mobile.trim().replace(/[^0-9+]/g, '')) && (
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-100 text-[10px] font-extrabold animate-fade-in w-full">
-                    ⚠️ Already in this tournament
-                  </span>
-                )}
-              </div>
+              <label className="text-xs font-bold text-slate-500">Mobile</label>
+              <input 
+                value={player.mobile} 
+                onChange={(e) => setPlayer({...player, mobile: e.target.value})} 
+                className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition" 
+                placeholder="e.g. 9876543210" 
+                type="tel"
+              />
             </div>
+
+            {/* Partner Player (Doubles Only) */}
+            {isDoublesMode && (
+              <>
+                <div className="space-y-1 md:col-span-2">
+                  <label className="text-xs font-bold text-slate-500">Partner Player Name</label>
+                  <input 
+                    value={partnerName}
+                    onChange={(e) => setPartnerName(e.target.value)}
+                    className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition" 
+                    placeholder="e.g. Jane Smith" 
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-500">Partner Mobile</label>
+                  <input 
+                    value={partnerMobile}
+                    onChange={(e) => setPartnerMobile(e.target.value)}
+                    className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition" 
+                    placeholder="e.g. 9876543211" 
+                    type="tel"
+                  />
+                </div>
+              </>
+            )}
 
             {/* Age input */}
             <div className="space-y-1">
@@ -1010,12 +1235,46 @@ export default function PlayerManager({
                 value={player.age} 
                 onChange={(e) => setPlayer({...player, age: e.target.value})} 
                 className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition" 
-                placeholder="e.g. 24" 
-                type="number" 
+                placeholder="e.g. 25" 
+                type="number"
               />
             </div>
+            
+            {/* Add button */}
+            <div className="space-y-1">
+              <button 
+                onClick={handleAdd} 
+                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl transition text-sm shadow-sm hover:shadow flex items-center justify-center gap-1.5 h-[42px]"
+              >
+                <Plus className="w-4 h-4" /> Add
+              </button>
+            </div>
+          </div>
+          
+          <div className="min-h-[18px] flex flex-wrap gap-1 mt-1">
+            {isSearchingMobile && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-500 animate-pulse">
+                🔍 Looking up master registry...
+              </span>
+            )}
+            {!isSearchingMobile && matchedMasterProfile && (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-100 text-[10px] font-extrabold animate-fade-in">
+                👤 Profile Found: {matchedMasterProfile.name} ({matchedMasterProfile.age || 'No Age'})
+              </span>
+            )}
+            {!isSearchingMobile && player.mobile.trim().replace(/[^0-9+]/g, '').length >= 5 && !matchedMasterProfile && (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-100 text-[10px] font-extrabold animate-fade-in">
+                🆕 New profile (will register globally)
+              </span>
+            )}
+            {!isSearchingMobile && player.mobile.trim().replace(/[^0-9+]/g, '').length >= 5 && players.some(p => p.mobile && p.mobile.trim().replace(/[^0-9+]/g, '') === player.mobile.trim().replace(/[^0-9+]/g, '')) && (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-100 text-[10px] font-extrabold animate-fade-in w-full">
+                ⚠️ Already in this tournament
+              </span>
+            )}
+          </div>
 
-            {/* Chapter Assignment Dropdown */}
+          {/* Chapter Assignment Dropdown */}
             <div className="space-y-1">
               <label className="text-xs font-bold text-slate-500 flex items-center gap-1">
                 <Layers className="w-3.5 h-3.5 text-indigo-500" /> Assign Chapter (L2)
@@ -1063,6 +1322,147 @@ export default function PlayerManager({
               </button>
             </div>
           </div>
+      )}
+
+      {/* -------------------- MANUAL PAIR BINDER (Admin only) -------------------- */}
+      {isAdmin && importMode === 'pairs' && (
+        <div className="p-6 bg-slate-50/70 border border-slate-100 rounded-2xl space-y-6">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+            <div>
+              <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest flex items-center gap-1.5">
+                <Users className="w-4 h-4 text-indigo-500" /> Doubles Pair Binder
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">Bind two individual players together to play as a team/pair in doubles category matches.</p>
+            </div>
+          </div>
+
+          {/* Binding Form */}
+          <div className="bg-white p-5 rounded-xl border border-slate-200/60 shadow-xs space-y-4">
+            <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide">Link Two Players into a New Pair</h4>
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
+              <div className="space-y-1 md:col-span-2">
+                <label className="text-xs font-bold text-slate-500">Player 1</label>
+                <select
+                  value={binderPlayer1Id}
+                  onChange={(e) => setBinderPlayer1Id(e.target.value)}
+                  className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition cursor-pointer"
+                >
+                  <option value="">-- Choose First Player --</option>
+                  {players
+                    .filter(p => !p.pairId)
+                    .map(p => (
+                      <option key={p.id} value={p.id}>{p.name} {p.mobile ? `(${p.mobile})` : ''}</option>
+                    ))
+                  }
+                </select>
+              </div>
+
+              <div className="space-y-1 md:col-span-2">
+                <label className="text-xs font-bold text-slate-500">Player 2</label>
+                <select
+                  value={binderPlayer2Id}
+                  onChange={(e) => setBinderPlayer2Id(e.target.value)}
+                  className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition cursor-pointer"
+                  disabled={!binderPlayer1Id}
+                >
+                  <option value="">-- Choose Second Player --</option>
+                  {players
+                    .filter(p => !p.pairId && p.id !== binderPlayer1Id)
+                    .map(p => (
+                      <option key={p.id} value={p.id}>{p.name} {p.mobile ? `(${p.mobile})` : ''}</option>
+                    ))
+                  }
+                </select>
+              </div>
+
+              <div>
+                <button
+                  onClick={handleBindPair}
+                  disabled={isBinding || !binderPlayer1Id || !binderPlayer2Id}
+                  className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white font-extrabold rounded-xl transition text-sm shadow-sm flex items-center justify-center gap-1.5 h-[42px]"
+                >
+                  {isBinding ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} Bind as Pair
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Active Pairs List */}
+          <div className="space-y-3">
+            <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide">Active Linked Pairs</h4>
+            {Array.from(
+              players
+                .filter(p => p.pairId)
+                .reduce((map, p) => {
+                  if (!map.has(p.pairId)) map.set(p.pairId, []);
+                  map.get(p.pairId).push(p);
+                  return map;
+                }, new Map<string, any[]>())
+                .entries()
+            ).length === 0 ? (
+              <div className="text-center py-8 bg-white border border-slate-200 rounded-xl">
+                <p className="text-slate-500 text-xs font-semibold">No active linked pairs. Use the form above to link players together.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {Array.from(
+                  players
+                    .filter(p => p.pairId)
+                    .reduce((map, p) => {
+                      if (!map.has(p.pairId)) map.set(p.pairId, []);
+                      map.get(p.pairId).push(p);
+                      return map;
+                    }, new Map<string, any[]>())
+                    .entries()
+                ).map(([pairId, pairPlayers], idx) => {
+                  const p1 = pairPlayers[0];
+                  const p2 = pairPlayers[1] || null;
+
+                  const p1Group = groups.find(g => g.playerIds?.includes(p1.id));
+                  const p2Group = p2 ? groups.find(g => g.playerIds?.includes(p2.id)) : null;
+
+                  return (
+                    <div key={pairId} className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs hover:shadow-xs transition flex flex-col justify-between space-y-4">
+                      <div className="flex justify-between items-start gap-2">
+                        <div>
+                          <span className="text-[10px] font-black text-indigo-500 uppercase tracking-wider block mb-1">Pair #{idx + 1}</span>
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2">
+                              <div className="w-6 h-6 rounded bg-indigo-50 text-indigo-700 flex items-center justify-center text-[10px] font-bold">1</div>
+                              <span className="font-bold text-slate-800 text-sm">{p1.name}</span>
+                              {p1Group && (
+                                <span className="text-[9px] font-extrabold bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded uppercase">{p1Group.name}</span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <div className="w-6 h-6 rounded bg-emerald-50 text-emerald-700 flex items-center justify-center text-[10px] font-bold">2</div>
+                              {p2 ? (
+                                <>
+                                  <span className="font-bold text-slate-800 text-sm">{p2.name}</span>
+                                  {p2Group && (
+                                    <span className="text-[9px] font-extrabold bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded uppercase">{p2Group.name}</span>
+                                  )}
+                                </>
+                              ) : (
+                                <span className="text-slate-400 text-xs italic">No partner (individual)</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={() => handleUnlinkPair(pairId)}
+                          className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 text-[10px] font-bold rounded-lg border border-rose-100 transition-colors"
+                        >
+                          Unlink Pair
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -1107,7 +1507,16 @@ export default function PlayerManager({
                 />
 
                 <div className="flex justify-between items-center pt-2">
-                  <div className="flex items-center gap-2 text-xs">
+                  <div className="flex items-center gap-4 text-xs">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={isDoublesImport}
+                        onChange={e => setIsDoublesImport(e.target.checked)}
+                        className="w-4 h-4 text-indigo-600 rounded"
+                      />
+                      <span className="text-xs font-bold text-slate-700">Import as Doubles</span>
+                    </div>
                     <label className="text-slate-500 font-bold">Assign Group to All (Optional):</label>
                     <select
                       value={selectedGroupId}
@@ -1202,6 +1611,64 @@ export default function PlayerManager({
               )}
 
                {/* Interactive preview table */}
+              <div className="flex items-center gap-2 mb-2 p-2">
+                <input
+                  type="checkbox"
+                  checked={showUnlinkedOnly}
+                  onChange={(e) => setShowUnlinkedOnly(e.target.checked)}
+                  className="w-4 h-4 text-indigo-600 rounded"
+                />
+                <span className="text-xs font-bold text-slate-700">Show Unlinked Only</span>
+                
+                <button
+                  onClick={() => {
+                    const calculateAge = (birthDateString: string) => {
+                      const today = new Date();
+                      const birthDate = new Date(birthDateString);
+                      let age = today.getFullYear() - birthDate.getFullYear();
+                      const m = today.getMonth() - birthDate.getMonth();
+                      if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
+                          age--;
+                      }
+                      return age;
+                    };
+
+                    let updatedCount = 0;
+                    const updated = parsedPlayers.map(p => {
+                      const cleanMobile = p.mobile.replace(/[^0-9+]/g, '').trim();
+                      if (cleanMobile) {
+                        const matchedMaster = masterRegistry.find(mr => mr.mobile === cleanMobile || mr.id === cleanMobile);
+                        if (matchedMaster) {
+                          let newAge = null;
+                          if (matchedMaster.age !== undefined && matchedMaster.age !== null) {
+                            newAge = matchedMaster.age;
+                          } else if (matchedMaster.birthdate) {
+                            newAge = calculateAge(matchedMaster.birthdate);
+                          } else if (matchedMaster.dob) {
+                            newAge = calculateAge(matchedMaster.dob);
+                          }
+
+                          if (newAge !== null) {
+                            updatedCount++;
+                            return { ...p, age: String(newAge), isAutoFilledFromGlobal: true };
+                          }
+                        }
+                      }
+                      return p;
+                    });
+                    
+                    if (updatedCount > 0) {
+                      setParsedPlayers(updated);
+                      alert(`Updated ages for ${updatedCount} players.`);
+                    } else {
+                      alert('No players found needing age updates based on mobile number.');
+                    }
+                  }}
+                  className="ml-4 px-3 py-1 bg-indigo-600 text-white text-[10px] font-bold rounded-lg hover:bg-indigo-700 transition"
+                >
+                  Auto-Fill All Ages
+                </button>
+              </div>
               <div className="overflow-x-auto border border-slate-150 rounded-2xl bg-white shadow-xs max-h-[380px]">
                 <table className="w-full text-left border-collapse text-xs">
                   <thead>
@@ -1215,29 +1682,34 @@ export default function PlayerManager({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 font-medium">
-                    {parsedPlayers.map((p, idx) => {
+                    {parsedPlayers
+                      .filter(p => !showUnlinkedOnly || !p.isAutoFilledFromGlobal)
+                      .map((p, idx) => {
                       // Inline Row validator re-trigger
                       const updateFieldAndValidate = (field: string, val: string) => {
+                        const originalIndex = parsedPlayers.findIndex(item => item.tempId === p.tempId);
+                        if (originalIndex === -1) return;
+
                         const updated = [...parsedPlayers];
-                        updated[idx][field] = val;
+                        updated[originalIndex][field] = val;
                         
                         // Recalculate row status
-                        const cleanMobile = updated[idx].mobile.replace(/[^0-9+]/g, '').trim();
-                        updated[idx].mobile = cleanMobile;
+                        const cleanMobile = updated[originalIndex].mobile.replace(/[^0-9+]/g, '').trim();
+                        updated[originalIndex].mobile = cleanMobile;
 
                         let isValid = true;
                         let errorMsg = "";
-                        let matchedChapterId = updated[idx].chapterId || "";
-                        let matchedChapterName = updated[idx].matchedChapterName || "";
+                        let matchedChapterId = updated[originalIndex].chapterId || "";
+                        let matchedChapterName = updated[originalIndex].matchedChapterName || "";
 
-                        if (!updated[idx].name.trim()) {
+                        if (!updated[originalIndex].name.trim()) {
                           isValid = false;
                           errorMsg = "Name is required.";
                         } else if (!cleanMobile) {
                           isValid = false;
                           errorMsg = "Mobile number is required.";
                         } else {
-                          const isPastedDup = updated.some((item, i) => i !== idx && item.mobile === cleanMobile);
+                          const isPastedDup = updated.some((item, i) => i !== originalIndex && item.mobile === cleanMobile);
                           if (isPastedDup) {
                             isValid = false;
                             errorMsg = "Duplicate phone number in pasted list.";
@@ -1254,9 +1726,13 @@ export default function PlayerManager({
                         if (cleanMobile) {
                           const matchedMaster = masterRegistry.find(mr => mr.mobile === cleanMobile || mr.id === cleanMobile);
                           if (matchedMaster) {
-                            if (!updated[idx].name.trim() && matchedMaster.name) {
-                              updated[idx].name = matchedMaster.name;
-                              updated[idx].isAutoFilledFromGlobal = true;
+                            if (!updated[originalIndex].name.trim() && matchedMaster.name) {
+                              updated[originalIndex].name = matchedMaster.name;
+                              updated[originalIndex].isAutoFilledFromGlobal = true;
+                            }
+                            if ((!updated[originalIndex].age || updated[originalIndex].age.trim() === '') && matchedMaster.age !== undefined && matchedMaster.age !== null) {
+                              updated[originalIndex].age = String(matchedMaster.age);
+                              updated[originalIndex].isAutoFilledFromGlobal = true;
                             }
                             if (matchedMaster.l2) {
                               const chapter = allRootsLevel2.find(c => c.name.toLowerCase() === matchedMaster.l2.toLowerCase());
@@ -1268,10 +1744,10 @@ export default function PlayerManager({
                           }
                         }
 
-                        updated[idx].chapterId = matchedChapterId;
-                        updated[idx].matchedChapterName = matchedChapterName;
-                        updated[idx].isValid = isValid;
-                        updated[idx].errorMsg = errorMsg;
+                        updated[originalIndex].chapterId = matchedChapterId;
+                        updated[originalIndex].matchedChapterName = matchedChapterName;
+                        updated[originalIndex].isValid = isValid;
+                        updated[originalIndex].errorMsg = errorMsg;
                         setParsedPlayers(updated);
                       };
 
@@ -1447,6 +1923,7 @@ export default function PlayerManager({
               const isEditing = editingPlayerId === p.id;
               const assignment = allRootsPlayers.find(ap => ap.id === p.id);
               const assignedGroup = groups.find(g => g.playerIds?.includes(p.id));
+              const partner = p.pairId ? players.find(other => other.pairId === p.pairId && other.id !== p.id) : null;
 
               return (
                 <div 
@@ -1579,6 +2056,11 @@ export default function PlayerManager({
                               {assignedGroup && (
                                 <span className="flex items-center gap-1 px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-md text-[10px] font-black uppercase tracking-wider border border-indigo-100/60">
                                   <Users className="w-3 h-3 text-indigo-500" /> {assignedGroup.name}
+                                </span>
+                              )}
+                              {partner && (
+                                <span className="flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-md text-[10px] font-black border border-emerald-100/60" title="Doubles partner for this tournament">
+                                  👥 Partner: {partner.name}
                                 </span>
                               )}
                             </div>

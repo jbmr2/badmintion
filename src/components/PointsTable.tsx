@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { collection, query, onSnapshot, addDoc, updateDoc, doc, deleteDoc, getDocs, writeBatch } from 'firebase/firestore';
+import { collection, query, onSnapshot, addDoc, updateDoc, doc, deleteDoc, getDocs, writeBatch, increment } from 'firebase/firestore';
 import { 
   Trophy, 
   Users, 
@@ -22,6 +22,7 @@ import PlayerMatchesModal from './PlayerMatchesModal';
 
 interface StandingPlayer {
   playerId: string;
+  partnerId?: string;
   playerName: string;
   played: number;
   wins: number;
@@ -261,18 +262,59 @@ export default function PointsTable({
   // Calculate points grouped by groupName
   const groupedStats: Record<string, Record<string, any>> = {};
   
-  // Initialize with all groups and players
+  // Initialize with all groups and players/pairs
   groups.forEach(group => {
       groupedStats[group.name] = {};
-      group.playerIds?.forEach((playerId: string) => {
-          const playerName = playerMap[playerId];
-          if (playerName) {
-              groupedStats[group.name][playerName] = { 
-                  playerId,
-                  wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0 
+      
+      const groupPlayers = players.filter(p => group.playerIds?.includes(p.id));
+      const hasPairs = groupPlayers.some(p => p.pairId);
+
+      if (hasPairs) {
+        // We are in a doubles group. Group players by their pairId or treat single player pairs correctly
+        const processedPlayerIds = new Set<string>();
+        
+        groupPlayers.forEach(p => {
+          if (processedPlayerIds.has(p.id)) return;
+          
+          if (p.pairId) {
+            // Find partner
+            const partner = groupPlayers.find(other => other.pairId === p.pairId && other.id !== p.id);
+            if (partner) {
+              const pairName = `${p.name} & ${partner.name}`;
+              groupedStats[group.name][pairName] = {
+                playerId: p.id, // we can use the main player's ID for references
+                partnerId: partner.id,
+                wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0 
               };
+              processedPlayerIds.add(p.id);
+              processedPlayerIds.add(partner.id);
+            } else {
+              groupedStats[group.name][p.name] = {
+                playerId: p.id,
+                wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0 
+              };
+              processedPlayerIds.add(p.id);
+            }
+          } else {
+            groupedStats[group.name][p.name] = {
+              playerId: p.id,
+              wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0 
+            };
+            processedPlayerIds.add(p.id);
           }
-      });
+        });
+      } else {
+        // Singles group
+        group.playerIds?.forEach((playerId: string) => {
+            const playerName = playerMap[playerId];
+            if (playerName) {
+                groupedStats[group.name][playerName] = { 
+                    playerId,
+                    wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0 
+                };
+            }
+        });
+      }
   });
 
   matches.forEach(match => {
@@ -280,8 +322,13 @@ export default function PointsTable({
       if (!fixture || !fixture.groupName) return;
 
       const groupName = fixture.groupName;
-      const p1 = fixture.player1Name;
-      const p2 = fixture.player2Name;
+      const isDoublesMatch = !!(fixture.isDoubles || fixture.player1aId || fixture.player1bId || fixture.player2aId || fixture.player2bId);
+      const p1 = isDoublesMatch
+        ? (fixture.player1bName ? `${fixture.player1aName} & ${fixture.player1bName}` : fixture.player1aName)
+        : fixture.player1Name;
+      const p2 = isDoublesMatch
+        ? (fixture.player2bName ? `${fixture.player2aName} & ${fixture.player2bName}` : fixture.player2aName)
+        : fixture.player2Name;
       const s = match.scores;
 
       // Ignore matches that are designated as knockout match types for group standings
@@ -289,10 +336,16 @@ export default function PointsTable({
 
       if (!groupedStats[groupName]) groupedStats[groupName] = {};
       if (!groupedStats[groupName][p1]) {
-        groupedStats[groupName][p1] = { playerId: fixture.player1Id, wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0 };
+        groupedStats[groupName][p1] = { 
+          playerId: isDoublesMatch ? fixture.player1aId : fixture.player1Id, 
+          wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0 
+        };
       }
       if (!groupedStats[groupName][p2]) {
-        groupedStats[groupName][p2] = { playerId: fixture.player2Id, wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0 };
+        groupedStats[groupName][p2] = { 
+          playerId: isDoublesMatch ? fixture.player2aId : fixture.player2Id, 
+          wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0 
+        };
       }
 
       // Update P1
@@ -316,7 +369,7 @@ export default function PointsTable({
 
   // Calculate sorted rankings for each group
   const isRoundRobinA = tournament?.tournamentType?.toLowerCase().includes('round robin a') || tournament?.tournamentType?.toLowerCase().includes('robin a');
-  const winPointsValue = tournament?.winPoints !== undefined ? Number(tournament.winPoints) : 2;
+  const winPointsValue = tournament?.winPoints !== undefined ? Number(tournament.winPoints) : 5;
   const lossPointsValue = tournament?.lossPoints !== undefined ? Number(tournament.lossPoints) : 0;
 
   const groupRankings: Record<string, StandingPlayer[]> = {};
@@ -328,6 +381,7 @@ export default function PointsTable({
       const pointDiff = stats.pointsScored - stats.pointsAgainst;
       return {
         playerId: stats.playerId,
+        partnerId: stats.partnerId,
         playerName,
         played,
         wins: stats.wins,
@@ -363,18 +417,63 @@ export default function PointsTable({
   const semis = fixtures.filter(f => f.matchType === 'semi');
   const finals = fixtures.filter(f => f.matchType === 'final');
 
+  // Helper to determine points delta based on matchType (League: 5 | QF: 10 | SF: 15 | Final: 25)
+  const getPointsDelta = (fixture?: any) => {
+    if (!fixture) return 5;
+    const t = fixture.matchType?.toLowerCase() || 'league';
+    if (t.includes('pre_quarter') || t.includes('pre-quarter') || t.includes('pre quarter')) return 5;
+    if (t.includes('quarter') || t.includes('quater')) return 10;
+    if (t.includes('semi')) return 15;
+    if (t.includes('final')) return 25;
+    return 5;
+  };
+
+  const adjustTeamPoints = async (winnerPlayerId: string, delta: number, fixture?: any) => {
+    if (fixture?.groupName?.toLowerCase().includes('family')) {
+      return;
+    }
+    try {
+      const teamsSnapshot = await getDocs(collection(db, `tournaments/${tournamentId}/teams`));
+      const teamDoc = teamsSnapshot.docs.find(doc => doc.data().playerIds?.includes(winnerPlayerId));
+      if (teamDoc) {
+        const teamData = teamDoc.data();
+        if (teamData?.name?.toLowerCase().includes('family')) {
+          return;
+        }
+        await updateDoc(teamDoc.ref, { points: increment(delta) });
+      }
+    } catch (e) {
+      console.error("Error adjusting team points:", e);
+    }
+  };
+
   // Delete a fixture
   const handleDeleteFixture = async (id: string) => {
     try {
-      await deleteDoc(doc(db, `tournaments/${tournamentId}/fixtures`, id));
+      const fixtureObj = fixtures.find(f => f.id === id) || fixtureToDelete;
       
-      // Delete associated match document if completed
+      // Delete associated match document if completed and adjust points
       const matchesQuery = query(collection(db, `tournaments/${tournamentId}/matches`));
       const mSnap = await getDocs(matchesQuery);
       const assocMatch = mSnap.docs.find(doc => doc.data().fixtureId === id);
-      if (assocMatch) {
+      
+      if (assocMatch && fixtureObj) {
+        const mData = assocMatch.data();
+        if (mData && mData.winner) {
+          const isDoublesMatch = !!(fixtureObj.isDoubles || fixtureObj.player1aId || fixtureObj.player1bId || fixtureObj.player2aId || fixtureObj.player2bId);
+          const winnerPlayerId = mData.winner === 'player1'
+            ? (isDoublesMatch ? fixtureObj.player1aId : fixtureObj.player1Id)
+            : (isDoublesMatch ? fixtureObj.player2aId : fixtureObj.player2Id);
+          
+          if (winnerPlayerId) {
+            const pointsDelta = getPointsDelta(fixtureObj);
+            await adjustTeamPoints(winnerPlayerId, -pointsDelta, fixtureObj);
+          }
+        }
         await deleteDoc(assocMatch.ref);
       }
+
+      await deleteDoc(doc(db, `tournaments/${tournamentId}/fixtures`, id));
       setFixtureToDelete(null);
     } catch (e) {
       console.error("Error deleting knockout match:", e);
@@ -806,6 +905,293 @@ export default function PointsTable({
     }
   };
 
+  const renderBracketMatchCard = (f: any, idx: number, stageLabel: string, isGrandFinal = false) => {
+    const winner = getFixtureWinner(f);
+    const isDoublesMatch = !!(f.isDoubles || f.player1aId || f.player1bId || f.player2aId || f.player2bId);
+
+    // Determine scores safely
+    const s = f.scores || { p1g1: 0, p2g1: 0, p1g2: 0, p2g2: 0, p1g3: 0, p2g3: 0 };
+    const isCompleted = f.status === 'completed';
+
+    // Show Game 3 if Game 3 has any scores or if the match was a 3-set match
+    const showG3 = (s.p1g3 > 0 || s.p2g3 > 0 || (isCompleted && (s.p1g1 > 0 || s.p1g2 > 0) && !((s.p1g1 > s.p2g1 && s.p1g2 > s.p2g2) || (s.p2g1 > s.p1g1 && s.p2g2 > s.p1g2))));
+
+    // Determine team displays and L2 names
+    const p1NameMain = isDoublesMatch ? f.player1aName : f.player1Name;
+    const p1NamePartner = isDoublesMatch ? f.player1bName : null;
+    const p1L2Main = isDoublesMatch ? playerL2Map[f.player1aId] : playerL2Map[f.player1Id];
+    const p1L2Partner = isDoublesMatch ? playerL2Map[f.player1bId] : null;
+
+    const p2NameMain = isDoublesMatch ? f.player2aName : f.player2Name;
+    const p2NamePartner = isDoublesMatch ? f.player2bName : null;
+    const p2L2Main = isDoublesMatch ? playerL2Map[f.player2aId] : playerL2Map[f.player2Id];
+    const p2L2Partner = isDoublesMatch ? playerL2Map[f.player2bId] : null;
+
+    if (isGrandFinal) {
+      return (
+        <div key={f.id} className="bg-slate-900 text-white border-2 border-amber-400/40 rounded-3xl p-5 shadow-xl relative group overflow-hidden hover:border-amber-400 transition-all duration-300">
+          <div className="absolute top-0 right-0 p-2.5">
+            <Award className="w-6 h-6 text-amber-400 animate-pulse" />
+          </div>
+
+          {/* Match Header info */}
+          <div className="flex justify-between items-center text-[10px] font-black text-amber-400 uppercase tracking-widest border-b border-slate-800 pb-2.5 mb-3.5 pr-6">
+            <span>CHAMPIONSHIP FINALS ({f.pointsTarget || '21'} pts) {f.court ? `• ${f.court}` : ''}</span>
+            {canEdit && (
+              <button 
+                onClick={() => setFixtureToDelete(f)}
+                className="text-amber-500/60 hover:text-rose-400 transition p-1 hover:bg-slate-800 rounded-lg shrink-0"
+                title="Delete Grand Final"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          {/* Players row with scores */}
+          <div className="space-y-3.5">
+            {/* Row 1: Player/Team 1 */}
+            <div className={`flex items-center justify-between gap-3 ${isCompleted && winner?.key === 'player2' ? 'opacity-40' : ''}`}>
+              <div className="flex-1 min-w-0">
+                <span className={`text-sm font-black truncate block ${winner?.key === 'player1' ? 'text-amber-400' : 'text-slate-100'}`}>
+                  {p1NameMain || 'TBD'}
+                </span>
+                {p1NamePartner && (
+                  <span className={`text-xs font-black truncate block -mt-0.5 ${winner?.key === 'player1' ? 'text-amber-400/90' : 'text-slate-300'}`}>
+                    & {p1NamePartner}
+                  </span>
+                )}
+                {/* L2 Badge */}
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {p1L2Main && (
+                    <span className="text-[8px] text-amber-300 font-extrabold bg-amber-950/60 border border-amber-900/40 px-1.5 py-0.25 rounded uppercase tracking-wider" title="Level 2">
+                      {p1L2Main}
+                    </span>
+                  )}
+                  {p1L2Partner && p1L2Partner !== p1L2Main && (
+                    <span className="text-[8px] text-amber-300 font-extrabold bg-amber-950/60 border border-amber-900/40 px-1.5 py-0.25 rounded uppercase tracking-wider" title="Partner Level 2">
+                      {p1L2Partner}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Scores Column */}
+              <div className="flex gap-1 shrink-0 items-center font-mono text-xs font-black">
+                <span className={`w-8 h-8 flex items-center justify-center rounded-lg ${
+                  isCompleted && s.p1g1 > s.p2g1 ? 'bg-amber-400 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'
+                }`}>
+                  {s.p1g1 || 0}
+                </span>
+                <span className={`w-8 h-8 flex items-center justify-center rounded-lg ${
+                  isCompleted && s.p1g2 > s.p2g2 ? 'bg-amber-400 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'
+                }`}>
+                  {s.p1g2 || 0}
+                </span>
+                {showG3 && (
+                  <span className={`w-8 h-8 flex items-center justify-center rounded-lg ${
+                    isCompleted && s.p1g3 > s.p2g3 ? 'bg-amber-400 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'
+                  }`}>
+                    {s.p1g3 || 0}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Subtle Divider */}
+            <div className="border-t border-slate-800" />
+
+            {/* Row 2: Player/Team 2 */}
+            <div className={`flex items-center justify-between gap-3 ${isCompleted && winner?.key === 'player1' ? 'opacity-40' : ''}`}>
+              <div className="flex-1 min-w-0">
+                <span className={`text-sm font-black truncate block ${winner?.key === 'player2' ? 'text-amber-400' : 'text-slate-100'}`}>
+                  {p2NameMain || 'TBD'}
+                </span>
+                {p2NamePartner && (
+                  <span className={`text-xs font-black truncate block -mt-0.5 ${winner?.key === 'player2' ? 'text-amber-400/90' : 'text-slate-300'}`}>
+                    & {p2NamePartner}
+                  </span>
+                )}
+                {/* L2 Badge */}
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {p2L2Main && (
+                    <span className="text-[8px] text-amber-300 font-extrabold bg-amber-950/60 border border-amber-900/40 px-1.5 py-0.25 rounded uppercase tracking-wider" title="Level 2">
+                      {p2L2Main}
+                    </span>
+                  )}
+                  {p2L2Partner && p2L2Partner !== p2L2Main && (
+                    <span className="text-[8px] text-amber-300 font-extrabold bg-amber-950/60 border border-amber-900/40 px-1.5 py-0.25 rounded uppercase tracking-wider" title="Partner Level 2">
+                      {p2L2Partner}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Scores Column */}
+              <div className="flex gap-1 shrink-0 items-center font-mono text-xs font-black">
+                <span className={`w-8 h-8 flex items-center justify-center rounded-lg ${
+                  isCompleted && s.p2g1 > s.p1g1 ? 'bg-amber-400 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'
+                }`}>
+                  {s.p2g1 || 0}
+                </span>
+                <span className={`w-8 h-8 flex items-center justify-center rounded-lg ${
+                  isCompleted && s.p2g2 > s.p1g2 ? 'bg-amber-400 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'
+                }`}>
+                  {s.p2g2 || 0}
+                </span>
+                {showG3 && (
+                  <span className={`w-8 h-8 flex items-center justify-center rounded-lg ${
+                    isCompleted && s.p2g3 > s.p1g3 ? 'bg-amber-400 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'
+                  }`}>
+                    {s.p2g3 || 0}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {isCompleted && winner && (
+            <div className="mt-4 pt-3 border-t border-slate-850 text-center space-y-1 bg-amber-500/10 rounded-2xl p-2.5 border border-amber-500/20">
+              <p className="text-[10px] font-black tracking-widest text-amber-400 uppercase">🏆 TOURNAMENT CHAMPION 🏆</p>
+              <p className="font-black text-base tracking-tight text-white">{winner.name}</p>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // Default design for Pre-Quarters, Quarters, Semis
+    return (
+      <div key={f.id} className="bg-white border border-slate-150 rounded-2xl shadow-sm relative group overflow-hidden hover:border-slate-300 hover:shadow-md transition duration-200">
+        {/* Match Header info */}
+        <div className="flex justify-between items-center text-[9px] font-black text-slate-400 uppercase tracking-widest bg-slate-50 border-b border-slate-100 px-3 py-1.5">
+          <span>{stageLabel} {idx + 1} ({f.pointsTarget || '21'} pts) {f.court ? `• ${f.court}` : ''}</span>
+          {canEdit && (
+            <button 
+              onClick={() => setFixtureToDelete(f)}
+              className="text-slate-400 hover:text-rose-600 transition p-1 hover:bg-rose-50 rounded-lg shrink-0 opacity-0 group-hover:opacity-100"
+              title="Delete Fixture"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+
+        {/* Players list with scores on the right */}
+        <div className="p-3.5 space-y-3">
+          {/* Row 1: Player/Team 1 */}
+          <div className={`flex items-center justify-between gap-3 ${isCompleted && winner?.key === 'player2' ? 'opacity-40' : ''}`}>
+            <div className="flex-1 min-w-0">
+              <span className={`text-xs font-extrabold truncate block text-slate-800 ${winner?.key === 'player1' ? 'text-indigo-600 font-black' : ''}`}>
+                {p1NameMain || 'TBD'}
+              </span>
+              {p1NamePartner && (
+                <span className={`text-[11px] font-extrabold truncate block text-slate-500 -mt-0.5 ${winner?.key === 'player1' ? 'text-indigo-500/80 font-black' : ''}`}>
+                  & {p1NamePartner}
+                </span>
+              )}
+              {/* L2 Badge */}
+              <div className="flex flex-wrap gap-1 mt-0.5">
+                {p1L2Main && (
+                  <span className="text-[8px] text-indigo-600 font-extrabold bg-indigo-50 px-1 py-0.25 rounded" title="Level 2">
+                    {p1L2Main}
+                  </span>
+                )}
+                {p1L2Partner && p1L2Partner !== p1L2Main && (
+                  <span className="text-[8px] text-indigo-600 font-extrabold bg-indigo-50 px-1 py-0.25 rounded" title="Partner Level 2">
+                    {p1L2Partner}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Scores Set 1, 2, 3 columns */}
+            <div className="flex gap-1 shrink-0 items-center font-mono text-[11px] font-bold">
+              <span className={`w-7 h-7 flex items-center justify-center rounded-md ${
+                isCompleted && s.p1g1 > s.p2g1 ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' : 'bg-slate-50 text-slate-500'
+              }`}>
+                {s.p1g1 || 0}
+              </span>
+              <span className={`w-7 h-7 flex items-center justify-center rounded-md ${
+                isCompleted && s.p1g2 > s.p2g2 ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' : 'bg-slate-50 text-slate-500'
+              }`}>
+                {s.p1g2 || 0}
+              </span>
+              {showG3 && (
+                <span className={`w-7 h-7 flex items-center justify-center rounded-md ${
+                  isCompleted && s.p1g3 > s.p2g3 ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' : 'bg-slate-50 text-slate-500'
+                }`}>
+                  {s.p1g3 || 0}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Divider line between players */}
+          <div className="border-t border-slate-100" />
+
+          {/* Row 2: Player/Team 2 */}
+          <div className={`flex items-center justify-between gap-3 ${isCompleted && winner?.key === 'player1' ? 'opacity-40' : ''}`}>
+            <div className="flex-1 min-w-0">
+              <span className={`text-xs font-extrabold truncate block text-slate-800 ${winner?.key === 'player2' ? 'text-indigo-600 font-black' : ''}`}>
+                {p2NameMain || 'TBD'}
+              </span>
+              {p2NamePartner && (
+                <span className={`text-[11px] font-extrabold truncate block text-slate-500 -mt-0.5 ${winner?.key === 'player2' ? 'text-indigo-500/80 font-black' : ''}`}>
+                  & {p2NamePartner}
+                </span>
+              )}
+              {/* L2 Badge */}
+              <div className="flex flex-wrap gap-1 mt-0.5">
+                {p2L2Main && (
+                  <span className="text-[8px] text-indigo-600 font-extrabold bg-indigo-50 px-1 py-0.25 rounded" title="Level 2">
+                    {p2L2Main}
+                  </span>
+                )}
+                {p2L2Partner && p2L2Partner !== p2L2Main && (
+                  <span className="text-[8px] text-indigo-600 font-extrabold bg-indigo-50 px-1 py-0.25 rounded" title="Partner Level 2">
+                    {p2L2Partner}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Scores Set 1, 2, 3 columns */}
+            <div className="flex gap-1 shrink-0 items-center font-mono text-[11px] font-bold">
+              <span className={`w-7 h-7 flex items-center justify-center rounded-md ${
+                isCompleted && s.p2g1 > s.p1g1 ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' : 'bg-slate-50 text-slate-500'
+              }`}>
+                {s.p2g1 || 0}
+              </span>
+              <span className={`w-7 h-7 flex items-center justify-center rounded-md ${
+                isCompleted && s.p2g2 > s.p1g2 ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' : 'bg-slate-50 text-slate-500'
+              }`}>
+                {s.p2g2 || 0}
+              </span>
+              {showG3 && (
+                <span className={`w-7 h-7 flex items-center justify-center rounded-md ${
+                  isCompleted && s.p2g3 > s.p1g3 ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' : 'bg-slate-50 text-slate-500'
+                }`}>
+                  {s.p2g3 || 0}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Grand Winner Badge if Completed */}
+        {isCompleted && winner && (
+          <div className="bg-indigo-50/50 border-t border-slate-100 px-3 py-1.5 flex items-center justify-between">
+            <span className="text-[9px] font-black text-indigo-600 uppercase tracking-wider">Completed</span>
+            <span className="text-[9px] font-black text-emerald-700 flex items-center gap-0.5 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">
+              Winner: {winner.name}
+            </span>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-8 font-sans">
       
@@ -884,21 +1270,21 @@ export default function PointsTable({
                   </div>
 
                   <div className="overflow-x-auto rounded-2xl border border-slate-150">
-                    <table className="w-full border-collapse text-xs text-left">
+                    <table className="min-w-[1000px] w-full border-collapse text-xs text-left">
                       <thead>
                         <tr className="border-b border-slate-200 bg-slate-50/80 text-slate-500 font-extrabold uppercase">
-                          <th className="p-3 text-center w-12">Rank</th>
-                          <th className="p-3">Player / Team</th>
-                          <th className="p-3 text-center font-bold">Played</th>
-                          <th className="p-3 text-center text-emerald-600 font-bold">W</th>
-                          <th className="p-3 text-center text-rose-600 font-bold">L</th>
-                          <th className="p-3 text-center text-indigo-600 font-extrabold">Points</th>
-                          <th className="p-3 text-center font-semibold">Sets Won</th>
-                          <th className="p-3 text-center font-semibold">Sets Lost</th>
-                          <th className="p-3 text-center">Set Diff</th>
-                          <th className="p-3 text-center">Pts Scored</th>
-                          <th className="p-3 text-center">Pts Against</th>
-                          <th className="p-3 text-center">Pt Diff</th>
+                          <th className="p-3 text-center w-12 whitespace-nowrap">Rank</th>
+                          <th className="p-3 whitespace-nowrap">Player / Team</th>
+                          <th className="p-3 text-center font-bold whitespace-nowrap">Played</th>
+                          <th className="p-3 text-center text-emerald-600 font-bold whitespace-nowrap">W</th>
+                          <th className="p-3 text-center text-rose-600 font-bold whitespace-nowrap">L</th>
+                          <th className="p-3 text-center text-indigo-600 font-extrabold whitespace-nowrap">Points</th>
+                          <th className="p-3 text-center font-semibold whitespace-nowrap">Sets Won</th>
+                          <th className="p-3 text-center font-semibold whitespace-nowrap">Sets Lost</th>
+                          <th className="p-3 text-center whitespace-nowrap">Set Diff</th>
+                          <th className="p-3 text-center whitespace-nowrap">Pts Scored</th>
+                          <th className="p-3 text-center whitespace-nowrap">Pts Against</th>
+                          <th className="p-3 text-center whitespace-nowrap">Pt Diff</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 font-medium">
@@ -928,7 +1314,7 @@ export default function PointsTable({
 
                               {/* Player Name */}
                               <td 
-                                className="p-3 cursor-pointer group/cell"
+                                className="p-3 cursor-pointer group/cell whitespace-nowrap"
                                 onClick={() => setSelectedPlayerForMatches({ id: p.playerId, name: p.playerName })}
                                 title="Click to view all matches for this player"
                               >
@@ -944,16 +1330,26 @@ export default function PointsTable({
                                       </span>
                                     )}
                                   </div>
-                                  {(playerL1Map[p.playerId] || playerL2Map[p.playerId]) && (
+                                  {(playerL1Map[p.playerId] || playerL2Map[p.playerId] || (p.partnerId && (playerL1Map[p.partnerId] || playerL2Map[p.partnerId]))) && (
                                     <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
                                       {playerL1Map[p.playerId] && (
-                                        <span className="text-[8px] font-bold text-slate-500 bg-slate-100 border border-slate-200/60 px-1.5 py-0.25 rounded uppercase tracking-wider">
+                                        <span className="text-[8px] font-bold text-slate-500 bg-slate-100 border border-slate-200/60 px-1.5 py-0.25 rounded uppercase tracking-wider" title="Player Level 1">
                                           {playerL1Map[p.playerId]}
                                         </span>
                                       )}
                                       {playerL2Map[p.playerId] && (
-                                        <span className="text-[8px] font-black text-indigo-700 bg-indigo-50 border border-indigo-150 px-1.5 py-0.25 rounded uppercase tracking-wider">
-                                          L2: {playerL2Map[p.playerId]}
+                                        <span className="text-[8px] font-black text-indigo-700 bg-indigo-50 border border-indigo-150 px-1.5 py-0.25 rounded uppercase tracking-wider" title="Player Level 2">
+                                          {playerL2Map[p.playerId]}
+                                        </span>
+                                      )}
+                                      {p.partnerId && playerL1Map[p.partnerId] && playerL1Map[p.partnerId] !== playerL1Map[p.playerId] && (
+                                        <span className="text-[8px] font-bold text-slate-500 bg-slate-100 border border-slate-200/60 px-1.5 py-0.25 rounded uppercase tracking-wider" title="Partner Level 1">
+                                          {playerL1Map[p.partnerId]}
+                                        </span>
+                                      )}
+                                      {p.partnerId && playerL2Map[p.partnerId] && playerL2Map[p.partnerId] !== playerL2Map[p.playerId] && (
+                                        <span className="text-[8px] font-black text-indigo-700 bg-indigo-50 border border-indigo-150 px-1.5 py-0.25 rounded uppercase tracking-wider" title="Partner Level 2">
+                                          {playerL2Map[p.partnerId]}
                                         </span>
                                       )}
                                     </div>
@@ -962,26 +1358,26 @@ export default function PointsTable({
                               </td>
 
                               {/* Played / Wins / Losses */}
-                              <td className="p-3 text-center text-slate-600 font-bold">{p.played}</td>
-                              <td className="p-3 text-center font-bold text-emerald-600">{p.wins}</td>
-                              <td className="p-3 text-center font-bold text-rose-600">{p.losses}</td>
+                              <td className="p-3 text-center text-slate-600 font-bold whitespace-nowrap">{p.played}</td>
+                              <td className="p-3 text-center font-bold text-emerald-600 whitespace-nowrap">{p.wins}</td>
+                              <td className="p-3 text-center font-bold text-rose-600 whitespace-nowrap">{p.losses}</td>
 
                               {/* Total Standing Points */}
-                              <td className="p-3 text-center font-black text-sm text-indigo-600">
+                              <td className="p-3 text-center font-black text-sm text-indigo-600 whitespace-nowrap">
                                 {p.matchPoints}
                               </td>
 
                               {/* Sets Won / Lost */}
-                              <td className="p-3 text-center font-mono">{p.gamesWon}</td>
-                              <td className="p-3 text-center font-mono">{p.gamesLost}</td>
-                              <td className={`p-3 text-center font-mono font-bold ${p.gameDiff >= 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
+                              <td className="p-3 text-center font-mono whitespace-nowrap">{p.gamesWon}</td>
+                              <td className="p-3 text-center font-mono whitespace-nowrap">{p.gamesLost}</td>
+                              <td className={`p-3 text-center font-mono font-bold whitespace-nowrap ${p.gameDiff >= 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
                                 {p.gameDiff > 0 ? `+${p.gameDiff}` : p.gameDiff}
                               </td>
 
                               {/* Points Scored / Against / Diff */}
-                              <td className="p-3 text-center text-slate-500 font-mono">{p.pointsScored}</td>
-                              <td className="p-3 text-center text-slate-500 font-mono">{p.pointsAgainst}</td>
-                              <td className={`p-3 text-center font-mono font-bold ${p.pointDiff >= 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
+                              <td className="p-3 text-center text-slate-500 font-mono whitespace-nowrap">{p.pointsScored}</td>
+                              <td className="p-3 text-center text-slate-500 font-mono whitespace-nowrap">{p.pointsAgainst}</td>
+                              <td className={`p-3 text-center font-mono font-bold whitespace-nowrap ${p.pointDiff >= 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
                                 {p.pointDiff > 0 ? `+${p.pointDiff}` : p.pointDiff}
                               </td>
                             </tr>
@@ -1035,57 +1431,7 @@ export default function PointsTable({
                   </div>
 
                   <div className="space-y-3.5">
-                    {preQuarters.map((f, idx) => {
-                      const winner = getFixtureWinner(f);
-                      return (
-                        <div key={f.id} className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm relative group overflow-hidden">
-                          {/* Match Header info */}
-                          <div className="flex justify-between items-center text-[9px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-1.5 mb-2.5">
-                            <span>MATCH {idx + 1} ({f.pointsTarget || '15'} pts) {f.court ? `• ${f.court}` : ''}</span>
-                            {canEdit && (
-                              <button 
-                                onClick={() => setFixtureToDelete(f)}
-                                className="text-slate-400 hover:text-rose-600 transition p-1 hover:bg-rose-50 rounded-lg shrink-0"
-                                title="Delete Fixture"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </div>
-
-                          {/* Players row */}
-                          <div className="space-y-2">
-                            {/* Player 1 */}
-                            <div className="flex justify-between items-center text-xs">
-                              <span className={`font-extrabold truncate max-w-[130px] ${
-                                winner?.key === 'player1' ? 'text-indigo-600 font-black' : 'text-slate-700'
-                              }`}>
-                                {f.player1Name}
-                              </span>
-                              <span className="font-mono text-[10px] text-slate-400 font-bold bg-slate-50 px-1.5 py-0.5 rounded">
-                                {f.scores?.p1g1 || 0}-{f.scores?.p2g1 || 0} , {f.scores?.p1g2 || 0}-{f.scores?.p2g2 || 0}
-                              </span>
-                            </div>
-
-                            {/* Player 2 */}
-                            <div className="flex justify-between items-center text-xs">
-                              <span className={`font-extrabold truncate max-w-[130px] ${
-                                winner?.key === 'player2' ? 'text-indigo-600 font-black' : 'text-slate-700'
-                              }`}>
-                                {f.player2Name}
-                              </span>
-                              <span className="font-mono text-xs text-indigo-600 font-black">
-                                {f.status === 'completed' && winner ? (
-                                  <span className="px-1.5 py-0.5 bg-indigo-50 border border-indigo-100 rounded text-[9px] uppercase tracking-wide">Winner</span>
-                                ) : (
-                                  <span className="text-[10px] text-slate-400 capitalize font-bold">{f.status || 'Pending'}</span>
-                                )}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
+                    {preQuarters.map((f, idx) => renderBracketMatchCard(f, idx, 'PQ'))}
                   </div>
                 </div>
               )}
@@ -1103,57 +1449,7 @@ export default function PointsTable({
                       QF Bracket Pending Seeding
                     </div>
                   ) : (
-                    quarters.map((f, idx) => {
-                      const winner = getFixtureWinner(f);
-                      return (
-                        <div key={f.id} className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm relative group overflow-hidden">
-                          {/* Match Header info */}
-                          <div className="flex justify-between items-center text-[9px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-1.5 mb-2.5">
-                            <span>MATCH {idx + 1} ({f.pointsTarget || '21'} pts) {f.court ? `• ${f.court}` : ''}</span>
-                            {canEdit && (
-                              <button 
-                                onClick={() => setFixtureToDelete(f)}
-                                className="text-slate-400 hover:text-rose-600 transition p-1 hover:bg-rose-50 rounded-lg shrink-0"
-                                title="Delete Fixture"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </div>
-
-                          {/* Players row */}
-                          <div className="space-y-2">
-                            {/* Player 1 */}
-                            <div className="flex justify-between items-center text-xs">
-                              <span className={`font-extrabold truncate max-w-[130px] ${
-                                winner?.key === 'player1' ? 'text-indigo-600 font-black' : 'text-slate-700'
-                              }`}>
-                                {f.player1Name}
-                              </span>
-                              <span className="font-mono text-[10px] text-slate-400 font-bold bg-slate-50 px-1.5 py-0.5 rounded">
-                                {f.scores?.p1g1 || 0}-{f.scores?.p2g1 || 0} , {f.scores?.p1g2 || 0}-{f.scores?.p2g2 || 0}
-                              </span>
-                            </div>
-
-                            {/* Player 2 */}
-                            <div className="flex justify-between items-center text-xs">
-                              <span className={`font-extrabold truncate max-w-[130px] ${
-                                winner?.key === 'player2' ? 'text-indigo-600 font-black' : 'text-slate-700'
-                              }`}>
-                                {f.player2Name}
-                              </span>
-                              <span className="font-mono text-xs text-indigo-600 font-black">
-                                {f.status === 'completed' && winner ? (
-                                  <span className="px-1.5 py-0.5 bg-indigo-50 border border-indigo-100 rounded text-[9px] uppercase tracking-wide">Winner</span>
-                                ) : (
-                                  <span className="text-[10px] text-slate-400 capitalize font-bold">{f.status || 'Pending'}</span>
-                                )}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })
+                    quarters.map((f, idx) => renderBracketMatchCard(f, idx, 'QF'))
                   )}
                 </div>
               </div>
@@ -1171,57 +1467,7 @@ export default function PointsTable({
                       SF Bracket Pending Seeding
                     </div>
                   ) : (
-                    semis.map((f, idx) => {
-                      const winner = getFixtureWinner(f);
-                      return (
-                        <div key={f.id} className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm relative group overflow-hidden">
-                          {/* Match Header info */}
-                          <div className="flex justify-between items-center text-[9px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-1.5 mb-2.5">
-                            <span>SEMI FINAL {idx + 1} ({f.pointsTarget || '21'} pts) {f.court ? `• ${f.court}` : ''}</span>
-                            {canEdit && (
-                              <button 
-                                onClick={() => setFixtureToDelete(f)}
-                                className="text-slate-400 hover:text-rose-600 transition p-1 hover:bg-rose-50 rounded-lg shrink-0"
-                                title="Delete Fixture"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </div>
-
-                          {/* Players row */}
-                          <div className="space-y-2">
-                            {/* Player 1 */}
-                            <div className="flex justify-between items-center text-xs">
-                              <span className={`font-extrabold truncate max-w-[130px] ${
-                                winner?.key === 'player1' ? 'text-emerald-600 font-black' : 'text-slate-700'
-                              }`}>
-                                {f.player1Name}
-                              </span>
-                              <span className="font-mono text-[10px] text-slate-400 font-bold bg-slate-50 px-1.5 py-0.5 rounded">
-                                {f.scores?.p1g1 || 0}-{f.scores?.p2g1 || 0} , {f.scores?.p1g2 || 0}-{f.scores?.p2g2 || 0}
-                              </span>
-                            </div>
-
-                            {/* Player 2 */}
-                            <div className="flex justify-between items-center text-xs">
-                              <span className={`font-extrabold truncate max-w-[130px] ${
-                                winner?.key === 'player2' ? 'text-emerald-600 font-black' : 'text-slate-700'
-                              }`}>
-                                {f.player2Name}
-                              </span>
-                              <span className="font-mono text-xs text-emerald-600 font-black">
-                                {f.status === 'completed' && winner ? (
-                                  <span className="px-1.5 py-0.5 bg-emerald-50 border border-emerald-100 rounded text-[9px] uppercase tracking-wide">Winner</span>
-                                ) : (
-                                  <span className="text-[10px] text-slate-400 capitalize font-bold">{f.status || 'Pending'}</span>
-                                )}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })
+                    semis.map((f, idx) => renderBracketMatchCard(f, idx, 'SF'))
                   )}
                 </div>
               </div>
@@ -1230,7 +1476,7 @@ export default function PointsTable({
               <div className="space-y-4 w-[280px] md:w-auto shrink-0">
                 <div className="bg-slate-900 text-white p-3.5 rounded-2xl flex items-center justify-between shadow-sm">
                   <span className="font-black text-xs uppercase tracking-widest text-amber-400">Grand Final</span>
-                  <span className="text-[10px] bg-amber-950 px-2 py-0.5 rounded font-bold font-mono">1 Match</span>
+                  <span className="text-[10px] bg-amber-950 px-2 py-0.5 rounded font-bold font-mono">{finals.length} Match</span>
                 </div>
 
                 <div className="space-y-3.5">
@@ -1239,64 +1485,7 @@ export default function PointsTable({
                       Final Pending Promotion
                     </div>
                   ) : (
-                    finals.map((f) => {
-                      const winner = getFixtureWinner(f);
-                      return (
-                        <div key={f.id} className="bg-indigo-950 text-white border border-indigo-900 rounded-2xl p-5 shadow-lg relative group overflow-hidden">
-                          <div className="absolute top-0 right-0 p-1.5">
-                            <Award className="w-5 h-5 text-amber-400 animate-pulse" />
-                          </div>
-
-                          {/* Match Header info */}
-                          <div className="flex justify-between items-center text-[9px] font-black text-indigo-400 uppercase tracking-widest border-b border-indigo-900 pb-2 mb-3">
-                            <span>CHAMPIONSHIP FINALS ({f.pointsTarget || '21'} pts) {f.court ? `• ${f.court}` : ''}</span>
-                            {canEdit && (
-                              <button 
-                                onClick={() => setFixtureToDelete(f)}
-                                className="text-indigo-400 hover:text-rose-400 transition p-1 hover:bg-indigo-900 rounded-lg shrink-0"
-                                title="Delete Fixture"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </div>
-
-                          {/* Players row */}
-                          <div className="space-y-2.5">
-                            {/* Player 1 */}
-                            <div className="flex justify-between items-center text-sm">
-                              <span className={`font-black truncate max-w-[130px] ${
-                                winner?.key === 'player1' ? 'text-amber-400' : 'text-slate-200'
-                              }`}>
-                                {f.player1Name}
-                              </span>
-                              <span className="font-mono text-xs font-extrabold text-slate-300">
-                                {f.scores?.p1g1 || 0}-{f.scores?.p2g1 || 0}
-                              </span>
-                            </div>
-
-                            {/* Player 2 */}
-                            <div className="flex justify-between items-center text-sm">
-                              <span className={`font-black truncate max-w-[130px] ${
-                                winner?.key === 'player2' ? 'text-amber-400' : 'text-slate-200'
-                              }`}>
-                                {f.player2Name}
-                              </span>
-                              <span className="font-mono text-xs font-extrabold text-slate-300">
-                                {f.scores?.p1g2 || 0}-{f.scores?.p2g2 || 0}
-                              </span>
-                            </div>
-                          </div>
-
-                          {f.status === 'completed' && winner && (
-                            <div className="mt-4 pt-3 border-t border-indigo-900 text-center space-y-1 bg-indigo-900/40 rounded-xl p-2">
-                              <p className="text-[10px] font-black tracking-widest text-amber-400 uppercase">🏆 TOURNAMENT CHAMPION 🏆</p>
-                              <p className="font-black text-lg tracking-tight text-white">{winner.name}</p>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })
+                    finals.map((f, idx) => renderBracketMatchCard(f, idx, 'FINAL', true))
                   )}
                 </div>
               </div>
