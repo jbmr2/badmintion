@@ -317,7 +317,10 @@ export default function FixtureManager({
   };
 
   const adjustTeamPoints = async (winnerPlayerId: string, delta: number, fixture?: any) => {
-    if (fixture?.groupName?.toLowerCase().includes('family')) {
+    if (
+      fixture?.groupName?.toLowerCase().includes('family') ||
+      fixture?.groupName?.toLowerCase().includes('kids')
+    ) {
       return;
     }
     try {
@@ -325,7 +328,10 @@ export default function FixtureManager({
       const teamDoc = teamsSnapshot.docs.find(doc => doc.data().playerIds?.includes(winnerPlayerId));
       if (teamDoc) {
         const teamData = teamDoc.data();
-        if (teamData?.name?.toLowerCase().includes('family')) {
+        if (
+          teamData?.name?.toLowerCase().includes('family') ||
+          teamData?.name?.toLowerCase().includes('kids')
+        ) {
           return;
         }
         await updateDoc(teamDoc.ref, { points: increment(delta) });
@@ -833,7 +839,11 @@ export default function FixtureManager({
                 className="w-full bg-white border border-slate-200 text-slate-700 p-2.5 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition"
               >
                 <option value="">No Court Assigned</option>
-                {courts.map(court => <option key={court} value={court}>{court}</option>)}
+                {courts.map(court => {
+                  const isOtherLive = fixtures.some(x => x.status === 'live' && x.court === court && x.id !== editingFixture?.id);
+                  if (court === 'Court 1' && isOtherLive) return null;
+                  return <option key={court} value={court}>{court}</option>;
+                })}
               </select>
             </div>
           </div>

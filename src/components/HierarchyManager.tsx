@@ -965,6 +965,18 @@ export default function HierarchyManager({
       playerStats[p.id] = { wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0, points: 0, nonFamilyPoints: 0 };
     });
 
+    const isPlayerFemale = (pId: string, groupName?: string): boolean => {
+      const p = tPlayers.find(x => x.id === pId);
+      if (p?.gender === 'Female' || p?.gender?.toLowerCase() === 'female') {
+        return true;
+      }
+      const gLower = (groupName || '').toLowerCase();
+      if ((gLower.includes('women') || gLower.includes('female')) && !gLower.includes('mixed') && !gLower.includes('open')) {
+        return true;
+      }
+      return false;
+    };
+
     const getWinPoints = (type?: string, playerId?: string, groupName?: string) => {
       if (playerId) {
         const assignment = assigned.find(ap => ap.id === playerId);
@@ -976,10 +988,20 @@ export default function HierarchyManager({
           if (
             root?.name?.toLowerCase().includes('family') ||
             level1?.name?.toLowerCase().includes('family') ||
-            level2?.name?.toLowerCase().includes('family')
+            level2?.name?.toLowerCase().includes('family') ||
+            root?.name?.toLowerCase().includes('kids') ||
+            level1?.name?.toLowerCase().includes('kids') ||
+            level2?.name?.toLowerCase().includes('kids')
           ) {
             return 0;
           }
+        }
+      }
+
+      if (groupName) {
+        const gLower = groupName.toLowerCase();
+        if (gLower.includes('family') || gLower.includes('kids')) {
+          return 0;
         }
       }
 
@@ -990,6 +1012,8 @@ export default function HierarchyManager({
       if (t.includes('final')) return 25;
       return 5;
     };
+
+    const playersWithBonus = new Set<string>();
 
     mts.forEach(match => {
       const fixture = fxts.find(f => f.id === match.fixtureId);
@@ -1026,7 +1050,7 @@ export default function HierarchyManager({
         }
       });
 
-      const isFamilyCategory = fixture.groupName?.toLowerCase().includes('family');
+      const isFamilyCategory = fixture.groupName?.toLowerCase().includes('family') || fixture.groupName?.toLowerCase().includes('kids');
 
       // Update P1
       team1PlayerIds.forEach(pId => {
@@ -1039,6 +1063,11 @@ export default function HierarchyManager({
           }
         } else if (match.winner === 'player2') {
           playerStats[pId].losses++;
+        }
+
+        // Collect female players for flat bonus (+5 points for 1st match played)
+        if (!isFamilyCategory && isPlayerFemale(pId, fixture.groupName)) {
+          playersWithBonus.add(pId);
         }
 
         playerStats[pId].gamesWon += Number(match.p1Games || 0);
@@ -1060,11 +1089,24 @@ export default function HierarchyManager({
           playerStats[pId].losses++;
         }
 
+        // Collect female players for flat bonus (+5 points for 1st match played)
+        if (!isFamilyCategory && isPlayerFemale(pId, fixture.groupName)) {
+          playersWithBonus.add(pId);
+        }
+
         playerStats[pId].gamesWon += Number(match.p2Games || 0);
         playerStats[pId].gamesLost += Number(match.p1Games || 0);
         playerStats[pId].pointsScored += Number(s.p2g1 || 0) + Number(s.p2g2 || 0) + Number(s.p2g3 || 0);
         playerStats[pId].pointsAgainst += Number(s.p1g1 || 0) + Number(s.p1g2 || 0) + Number(s.p1g3 || 0);
       });
+    });
+
+    // Award +5 points flat to female players who played at least one non-family match
+    playersWithBonus.forEach(pId => {
+      if (playerStats[pId]) {
+        playerStats[pId].points += 5;
+        playerStats[pId].nonFamilyPoints += 5;
+      }
     });
 
     return playerStats;
@@ -1089,6 +1131,18 @@ export default function HierarchyManager({
       activeMatches,
       activeFixtures
     );
+
+    const isPlayerFemale = (pId: string, groupName?: string): boolean => {
+      const p = activeTPlayers.find(x => x.id === pId);
+      if (p?.gender === 'Female' || p?.gender?.toLowerCase() === 'female') {
+        return true;
+      }
+      const gLower = (groupName || '').toLowerCase();
+      if ((gLower.includes('women') || gLower.includes('female')) && !gLower.includes('mixed') && !gLower.includes('open')) {
+        return true;
+      }
+      return false;
+    };
 
     // Helper to fetch player's Chapter, Parent and Root keys
     const getPlayerLocation = (pId: string) => {
@@ -1361,6 +1415,8 @@ export default function HierarchyManager({
       });
     }
 
+    const playersWithHierarchyBonus = new Set<string>();
+
     // Accumulate match statistics directly into chapters, parent teams, and roots to ensure no double-counting
     activeMatches.forEach(match => {
       const fixture = activeFixtures.find(f => f.id === match.fixtureId);
@@ -1385,7 +1441,7 @@ export default function HierarchyManager({
       }
 
       const s = match.scores || {};
-      const isFamilyCategory = fixture.groupName?.toLowerCase().includes('family');
+      const isFamilyCategory = fixture.groupName?.toLowerCase().includes('family') || fixture.groupName?.toLowerCase().includes('kids');
 
       // Get match win points based on stage
       const t = fixture.matchType?.toLowerCase() || 'league';
@@ -1512,6 +1568,33 @@ export default function HierarchyManager({
           rootStatsMap[rKey].pointsAgainst += Number(s.p1g1 || 0) + Number(s.p1g2 || 0) + Number(s.p1g3 || 0);
         }
       });
+
+      // Award female player bonus points (+5 points flat for 1st match played) to chapter/parent/root
+      if (!isFamilyCategory) {
+        team1PlayerIds.forEach(pId => {
+          if (isPlayerFemale(pId, fixture.groupName) && !playersWithHierarchyBonus.has(pId)) {
+            playersWithHierarchyBonus.add(pId);
+            const loc = getPlayerLocation(pId);
+            if (loc) {
+              if (loc.chapterKey && chapterStatsMap[loc.chapterKey]) chapterStatsMap[loc.chapterKey].points += 5;
+              if (loc.parentKey && parentStatsMap[loc.parentKey]) parentStatsMap[loc.parentKey].points += 5;
+              if (loc.rootKey && rootStatsMap[loc.rootKey]) rootStatsMap[loc.rootKey].points += 5;
+            }
+          }
+        });
+
+        team2PlayerIds.forEach(pId => {
+          if (isPlayerFemale(pId, fixture.groupName) && !playersWithHierarchyBonus.has(pId)) {
+            playersWithHierarchyBonus.add(pId);
+            const loc = getPlayerLocation(pId);
+            if (loc) {
+              if (loc.chapterKey && chapterStatsMap[loc.chapterKey]) chapterStatsMap[loc.chapterKey].points += 5;
+              if (loc.parentKey && parentStatsMap[loc.parentKey]) parentStatsMap[loc.parentKey].points += 5;
+              if (loc.rootKey && rootStatsMap[loc.rootKey]) rootStatsMap[loc.rootKey].points += 5;
+            }
+          }
+        });
+      }
     });
 
     // Show all roots in the standings

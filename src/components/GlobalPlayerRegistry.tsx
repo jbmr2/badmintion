@@ -27,7 +27,7 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
   const [activeTab, setActiveTab] = useState<'list' | 'add' | 'upload'>('list');
 
   // Manual Profile State
-  const [manualForm, setManualForm] = useState({ name: '', age: '', mobile: '', l2: '' });
+  const [manualForm, setManualForm] = useState({ name: '', age: '', mobile: '', gender: 'Male', l2: '' });
   const [editingPlayerId, setEditingPlayerId] = useState<string | null>(null);
   const [isSubmittingManual, setIsSubmittingManual] = useState(false);
 
@@ -99,11 +99,12 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
         name: manualForm.name.trim(),
         age: manualForm.age.trim() ? Number(manualForm.age.trim()) : '',
         mobile: cleanMobile,
+        gender: manualForm.gender || 'Male',
         l2: manualForm.l2.trim(),
         updatedAt: new Date().toISOString()
       }, { merge: true });
 
-      setManualForm({ name: '', age: '', mobile: '', l2: '' });
+      setManualForm({ name: '', age: '', mobile: '', gender: 'Male', l2: '' });
       setEditingPlayerId(null);
       setActiveTab('list');
     } catch (err) {
@@ -121,6 +122,7 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
       name: p.name || '',
       age: p.age !== undefined && p.age !== null ? String(p.age) : '',
       mobile: p.mobile || '',
+      gender: p.gender || 'Male',
       l2: p.l2 || ''
     });
     setActiveTab('add');
@@ -449,6 +451,7 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
                     <tr className="bg-slate-50 text-[11px] font-black uppercase text-slate-500 tracking-wider border-b border-slate-100">
                       <th className="p-3 pl-4">Player Profile</th>
                       <th className="p-3">Age</th>
+                      <th className="p-3">Gender</th>
                       <th className="p-3">Phone (Global Key)</th>
                       <th className="p-3">Global Chapter (L2)</th>
                       <th className="p-3 text-center pr-4">Actions</th>
@@ -466,6 +469,21 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
                           </div>
                         </td>
                         <td className="p-3 text-slate-500 font-semibold">{p.age || '—'}</td>
+                        <td className="p-3">
+                          {p.gender ? (
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold border ${
+                              p.gender === 'Female' 
+                                ? 'bg-rose-50 border-rose-100 text-rose-700' 
+                                : 'bg-blue-50 border-blue-100 text-blue-700'
+                            }`}>
+                              {p.gender === 'Female' ? '♀ Female' : '♂ Male'}
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold border bg-blue-50 border-blue-100 text-blue-700">
+                              ♂ Male
+                            </span>
+                          )}
+                        </td>
                         <td className="p-3">
                           <span className="inline-flex items-center gap-1.5 font-mono text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md font-bold">
                             <Phone className="w-3 h-3 text-indigo-500" />
@@ -565,6 +583,18 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
             </div>
 
             <div className="space-y-1">
+              <label className="text-xs font-bold text-slate-500">Gender</label>
+              <select 
+                value={manualForm.gender} 
+                onChange={(e) => setManualForm({...manualForm, gender: e.target.value})} 
+                className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-semibold focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition cursor-pointer"
+              >
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+              </select>
+            </div>
+
+            <div className="space-y-1">
               <label className="text-xs font-bold text-slate-500 flex items-center gap-1">
                 🏫 Global Chapter Name (Level 2 L2)
               </label>
@@ -595,7 +625,7 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
             </button>
             <button
               type="button"
-              onClick={() => { setActiveTab('list'); setEditingPlayerId(null); setManualForm({ name: '', age: '', mobile: '', l2: '' }); }}
+              onClick={() => { setActiveTab('list'); setEditingPlayerId(null); setManualForm({ name: '', age: '', mobile: '', gender: 'Male', l2: '' }); }}
               className="px-4 py-2.5 bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 font-bold rounded-xl text-xs transition cursor-pointer"
             >
               Cancel

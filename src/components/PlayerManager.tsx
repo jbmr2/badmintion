@@ -48,7 +48,8 @@ export default function PlayerManager({
   const isAdmin = userRole === 'admin';
   const [players, setPlayers] = useState<any[]>([]);
   const [selectedPlayerForMatches, setSelectedPlayerForMatches] = useState<{ id: string; name: string } | null>(null);
-  const [player, setPlayer] = useState({ name: '', age: '', mobile: '' });
+  const [player, setPlayer] = useState({ name: '', age: '', mobile: '', gender: 'Male' });
+  const [partnerGender, setPartnerGender] = useState('Female');
   const [selectedChapterId, setSelectedChapterId] = useState<string>('');
   const [selectedGroupId, setSelectedGroupId] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -87,7 +88,7 @@ export default function PlayerManager({
 
   // Editing state
   const [editingPlayerId, setEditingPlayerId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ name: '', age: '', mobile: '', chapterId: '', groupId: '' });
+  const [editForm, setEditForm] = useState({ name: '', age: '', mobile: '', gender: 'Male', chapterId: '', groupId: '' });
   const [playerToDelete, setPlayerToDelete] = useState<any | null>(null);
 
   // Master Global Registry state
@@ -149,7 +150,8 @@ export default function PlayerManager({
           setPlayer(prev => ({
             ...prev,
             name: prev.name.trim() === '' ? master.name : prev.name,
-            age: prev.age.trim() === '' ? master.age : prev.age
+            age: prev.age.trim() === '' ? master.age : prev.age,
+            gender: data.gender || prev.gender || 'Male'
           }));
 
           // Auto-select the Level 2 Chapter/Category if matched!
@@ -309,7 +311,7 @@ export default function PlayerManager({
 
     try {
       // Helper to add a player
-      const addPlayerToDb = async (pName: string, pAge: string, pMobile: string, pairId?: string) => {
+      const addPlayerToDb = async (pName: string, pAge: string, pMobile: string, pGender: string, pairId?: string) => {
         const pMobileTrimmed = pMobile.trim();
         const playersCol = collection(db, `tournaments/${tournamentId}/players`);
         const pRef = doc(playersCol);
@@ -319,6 +321,7 @@ export default function PlayerManager({
           name: pName.trim(),
           age: pAge ? Number(pAge) : '',
           mobile: pMobileTrimmed,
+          gender: pGender,
           pairId: pairId || null,
           createdAt: new Date().toISOString()
         });
@@ -328,14 +331,15 @@ export default function PlayerManager({
           name: pName.trim(),
           age: pAge ? Number(pAge) : '',
           mobile: pMobileTrimmed,
+          gender: pGender,
           updatedAt: new Date().toISOString()
         }, { merge: true });
 
-        return { id: pId, name: pName.trim(), pairId: pairId || null };
+        return { id: pId, name: pName.trim(), gender: pGender, pairId: pairId || null };
       };
 
       const pairId = isDoublesMode ? `pair_${Date.now()}` : undefined;
-      const player1 = await addPlayerToDb(player.name, player.age, mobileTrimmed, pairId);
+      const player1 = await addPlayerToDb(player.name, player.age, mobileTrimmed, player.gender || 'Male', pairId);
       let playersAdded = [player1];
 
       if (isDoublesMode) {
@@ -343,7 +347,7 @@ export default function PlayerManager({
            alert("Partner details are required for doubles registration.");
            return;
         }
-        const player2 = await addPlayerToDb(partnerName, '', partnerMobile, pairId);
+        const player2 = await addPlayerToDb(partnerName, '', partnerMobile, partnerGender || 'Female', pairId);
         playersAdded.push(player2);
       }
 
@@ -366,15 +370,17 @@ export default function PlayerManager({
             const newRosterRef = doc(db, `tournaments/${tournamentId}/roots/${chapter.rootId}/level1/${chapter.level1Id}/level2/${chapter.id}/players`, p.id);
             await setDoc(newRosterRef, {
               name: p.name,
+              gender: p.gender || 'Male',
               assignedAt: new Date().toISOString()
             });
           }
         }
       }
 
-      setPlayer({ name: '', age: '', mobile: '' });
+      setPlayer({ name: '', age: '', mobile: '', gender: 'Male' });
       setPartnerName('');
       setPartnerMobile('');
+      setPartnerGender('Female');
       setSelectedChapterId('');
       setSelectedGroupId('');
       setMatchedMasterProfile(null);
@@ -482,7 +488,8 @@ export default function PlayerManager({
       const updatedData = {
         name: editForm.name.trim(),
         age: editForm.age ? Number(editForm.age) : '',
-        mobile: mobileTrimmed
+        mobile: mobileTrimmed,
+        gender: editForm.gender || 'Male'
       };
       
       // Update main player doc
@@ -502,6 +509,7 @@ export default function PlayerManager({
         name: updatedData.name,
         age: updatedData.age,
         mobile: updatedData.mobile,
+        gender: updatedData.gender,
         ...(globalL2 ? { l2: globalL2 } : {}),
         updatedAt: new Date().toISOString()
       }, { merge: true });
@@ -526,6 +534,7 @@ export default function PlayerManager({
               name: updatedData.name,
               age: updatedData.age,
               mobile: updatedData.mobile,
+              gender: updatedData.gender,
               assignedAt: new Date().toISOString()
             });
           }
@@ -538,7 +547,8 @@ export default function PlayerManager({
           await updateDoc(rosterRef, {
             name: updatedData.name,
             age: updatedData.age,
-            mobile: updatedData.mobile
+            mobile: updatedData.mobile,
+            gender: updatedData.gender
           });
         }
       }
@@ -584,6 +594,7 @@ export default function PlayerManager({
       name: p.name,
       age: String(p.age || ''),
       mobile: String(p.mobile || ''),
+      gender: p.gender || 'Male',
       chapterId: activeAssignment ? activeAssignment.level2Id : '',
       groupId: playerGroup ? playerGroup.id : ''
     });
@@ -787,7 +798,7 @@ export default function PlayerManager({
         }
 
         // Auto-fuzzy match group
-        const matchedGroupId = matchGroup(originalGroup);
+        let matchedGroupId = matchGroup(originalGroup);
 
         // Auto-fuzzy match chapter from global registry
         let matchedChapterId = "";
@@ -800,6 +811,20 @@ export default function PlayerManager({
           }
         }
 
+        // If the pasted column matches an L2 chapter, let's assign it as the matchedChapterId!
+        if (!matchedChapterId && originalGroup) {
+          const chapterIdFromCol = matchChapter(originalGroup);
+          if (chapterIdFromCol) {
+            const chapter = allRootsLevel2.find(c => c.id === chapterIdFromCol);
+            if (chapter) {
+              matchedChapterId = chapter.id;
+              matchedChapterName = chapter.name;
+              // Clear matchedGroupId so it doesn't get assigned as a group
+              matchedGroupId = "";
+            }
+          }
+        }
+
         return {
           tempId: `parsed-${Date.now()}-${Math.random()}`,
           name: nameTrimmed,
@@ -807,8 +832,8 @@ export default function PlayerManager({
           mobile: mobileCleaned,
           originalGroup: originalGroup,
           pairTeam: pairTeam,
-          matchedGroupId,
-          matchedChapterId,
+          groupId: matchedGroupId,
+          chapterId: matchedChapterId,
           matchedChapterName,
           isValid,
           errorMsg,
@@ -919,7 +944,7 @@ export default function PlayerManager({
       }
 
       // Auto-fuzzy match group
-      const matchedGroupId = matchGroup(originalGroup);
+      let matchedGroupId = matchGroup(originalGroup);
 
       // Auto-fuzzy match chapter from global registry
       let matchedChapterId = "";
@@ -929,6 +954,20 @@ export default function PlayerManager({
         if (chapter) {
           matchedChapterId = chapter.id;
           matchedChapterName = chapter.name;
+        }
+      }
+
+      // If the pasted column matches an L2 chapter, let's assign it as the matchedChapterId!
+      if (!matchedChapterId && originalGroup) {
+        const chapterIdFromCol = matchChapter(originalGroup);
+        if (chapterIdFromCol) {
+          const chapter = allRootsLevel2.find(c => c.id === chapterIdFromCol);
+          if (chapter) {
+            matchedChapterId = chapter.id;
+            matchedChapterName = chapter.name;
+            // Clear matchedGroupId so it doesn't get assigned as a group
+            matchedGroupId = "";
+          }
         }
       }
 
@@ -1040,8 +1079,9 @@ export default function PlayerManager({
         }
 
         // Nested Chapter L2 Assignment
-        if (pData.chapterId) {
-          const chapter = allRootsLevel2.find(c => c.id === pData.chapterId);
+        let finalChapterId = pData.chapterId || selectedChapterId;
+        if (finalChapterId) {
+          const chapter = allRootsLevel2.find(c => c.id === finalChapterId);
           if (chapter) {
             const rosterRef = doc(db, `tournaments/${tournamentId}/roots/${chapter.rootId}/level1/${chapter.level1Id}/level2/${chapter.id}/players`, newId);
             await setDoc(rosterRef, {
@@ -1055,7 +1095,13 @@ export default function PlayerManager({
 
         // Group/Team Assignment
         let finalGroupId = pData.groupId;
-        if (!finalGroupId && pData.originalGroup) {
+        
+        // Check if the originalGroup string actually matches any L2 chapter
+        const isOriginalGroupAL2Chapter = finalChapterId && allRootsLevel2.some(
+          c => c.id === finalChapterId && c.name.toLowerCase() === pData.originalGroup?.trim().toLowerCase()
+        );
+
+        if (!finalGroupId && pData.originalGroup && !isOriginalGroupAL2Chapter) {
           const groupNameTrimmed = pData.originalGroup.trim();
           let matchedGroup = tempGroups.find(g => (g.name || '').trim().toLowerCase() === groupNameTrimmed.toLowerCase());
           if (matchedGroup) {
@@ -1180,33 +1226,45 @@ export default function PlayerManager({
             </div>
           </h3>
           
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 items-end">
-            {/* Primary Player */}
-            <div className="space-y-1 md:col-span-2">
-              <label className="text-xs font-bold text-slate-500">{isDoublesMode ? 'Primary Player Name' : 'Player Name'}</label>
-              <input 
-                value={player.name} 
-                onChange={(e) => setPlayer({...player, name: e.target.value})} 
-                className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition" 
-                placeholder="e.g. John Doe" 
-              />
-            </div>
-            
-            <div className="space-y-1">
-              <label className="text-xs font-bold text-slate-500">Mobile</label>
-              <input 
-                value={player.mobile} 
-                onChange={(e) => setPlayer({...player, mobile: e.target.value})} 
-                className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition" 
-                placeholder="e.g. 9876543210" 
-                type="tel"
-              />
+          <div className="space-y-4">
+            {/* Primary Player Block */}
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 items-end">
+              <div className="space-y-1 sm:col-span-2">
+                <label className="text-xs font-bold text-slate-500">{isDoublesMode ? 'Primary Player Name' : 'Player Name'}</label>
+                <input 
+                  value={player.name} 
+                  onChange={(e) => setPlayer({...player, name: e.target.value})} 
+                  className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition" 
+                  placeholder="e.g. John Doe" 
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-500">Mobile</label>
+                <input 
+                  value={player.mobile} 
+                  onChange={(e) => setPlayer({...player, mobile: e.target.value})} 
+                  className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition" 
+                  placeholder="e.g. 9876543210" 
+                  type="tel"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-500">Gender</label>
+                <select 
+                  value={player.gender} 
+                  onChange={(e) => setPlayer({...player, gender: e.target.value})} 
+                  className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition cursor-pointer"
+                >
+                  <option value="Male">Male</option>
+                  <option value="Female">Female</option>
+                </select>
+              </div>
             </div>
 
-            {/* Partner Player (Doubles Only) */}
+            {/* Partner Block (Doubles Only) */}
             {isDoublesMode && (
-              <>
-                <div className="space-y-1 md:col-span-2">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-end pt-2 border-t border-dashed border-slate-200">
+                <div className="space-y-1 sm:col-span-1">
                   <label className="text-xs font-bold text-slate-500">Partner Player Name</label>
                   <input 
                     value={partnerName}
@@ -1225,29 +1283,40 @@ export default function PlayerManager({
                     type="tel"
                   />
                 </div>
-              </>
+                <div className="space-y-1">
+                  <label className="text-xs font-bold text-slate-500">Partner Gender</label>
+                  <select 
+                    value={partnerGender} 
+                    onChange={(e) => setPartnerGender(e.target.value)} 
+                    className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition cursor-pointer"
+                  >
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                  </select>
+                </div>
+              </div>
             )}
 
-            {/* Age input */}
-            <div className="space-y-1">
-              <label className="text-xs font-bold text-slate-500">Age</label>
-              <input 
-                value={player.age} 
-                onChange={(e) => setPlayer({...player, age: e.target.value})} 
-                className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition" 
-                placeholder="e.g. 25" 
-                type="number"
-              />
-            </div>
-            
-            {/* Add button */}
-            <div className="space-y-1">
-              <button 
-                onClick={handleAdd} 
-                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl transition text-sm shadow-sm hover:shadow flex items-center justify-center gap-1.5 h-[42px]"
-              >
-                <Plus className="w-4 h-4" /> Add
-              </button>
+            {/* Metadata (Age + Add button) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end pt-2">
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-500">Age</label>
+                <input 
+                  value={player.age} 
+                  onChange={(e) => setPlayer({...player, age: e.target.value})} 
+                  className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition" 
+                  placeholder="e.g. 25" 
+                  type="number"
+                />
+              </div>
+              <div className="space-y-1">
+                <button 
+                  onClick={handleAdd} 
+                  className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl transition text-sm shadow-sm hover:shadow flex items-center justify-center gap-1.5 h-[42px]"
+                >
+                  <Plus className="w-4 h-4" /> Add
+                </button>
+              </div>
             </div>
           </div>
           
@@ -1507,7 +1576,7 @@ export default function PlayerManager({
                 />
 
                 <div className="flex justify-between items-center pt-2">
-                  <div className="flex items-center gap-4 text-xs">
+                  <div className="flex flex-wrap items-center gap-4 text-xs">
                     <div className="flex items-center gap-2">
                       <input
                         type="checkbox"
@@ -1517,17 +1586,36 @@ export default function PlayerManager({
                       />
                       <span className="text-xs font-bold text-slate-700">Import as Doubles</span>
                     </div>
-                    <label className="text-slate-500 font-bold">Assign Group to All (Optional):</label>
-                    <select
-                      value={selectedGroupId}
-                      onChange={e => setSelectedGroupId(e.target.value)}
-                      className="border border-slate-200 bg-white p-1.5 rounded-lg text-xs font-medium cursor-pointer"
-                    >
-                      <option value="">-- No Group Assignment --</option>
-                      {groups.map(g => (
-                        <option key={g.id} value={g.id}>{g.name}</option>
-                      ))}
-                    </select>
+
+                    <div className="flex items-center gap-1.5">
+                      <label className="text-slate-500 font-bold">Assign L2 Chapter to All:</label>
+                      <select
+                        value={selectedChapterId}
+                        onChange={e => setSelectedChapterId(e.target.value)}
+                        className="border border-slate-200 bg-white p-1.5 rounded-lg text-xs font-medium cursor-pointer max-w-[150px]"
+                      >
+                        <option value="">-- No L2 Chapter --</option>
+                        {sortedChapters.map(c => (
+                          <option key={c.id} value={c.id}>
+                            {c.rootName} &gt; {c.level1Name} &gt; {c.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <label className="text-slate-500 font-bold">Assign Group to All (Optional):</label>
+                      <select
+                        value={selectedGroupId}
+                        onChange={e => setSelectedGroupId(e.target.value)}
+                        className="border border-slate-200 bg-white p-1.5 rounded-lg text-xs font-medium cursor-pointer"
+                      >
+                        <option value="">-- No Group Assignment --</option>
+                        {groups.map(g => (
+                          <option key={g.id} value={g.id}>{g.name}</option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
 
                   <div className="flex items-center gap-3">
@@ -1677,6 +1765,7 @@ export default function PlayerManager({
                       <th className="p-3">Player Name</th>
                       <th className="p-3 w-20">Age</th>
                       <th className="p-3">Phone (Unique ID)</th>
+                      <th className="p-3">Chapter (L2) Assignment</th>
                       <th className="p-3">Group (Team) Assignment</th>
                       <th className="p-3 text-center pr-4">Action</th>
                     </tr>
@@ -1817,6 +1906,33 @@ export default function PlayerManager({
                             )}
                           </td>
 
+                          {/* Chapter (L2) assignment dropdown */}
+                          <td className="p-2">
+                            <select
+                              value={p.chapterId || ""}
+                              onChange={e => {
+                                const updated = [...parsedPlayers];
+                                updated[idx].chapterId = e.target.value;
+                                const ch = sortedChapters.find(c => c.id === e.target.value);
+                                updated[idx].matchedChapterName = ch ? ch.name : "";
+                                setParsedPlayers(updated);
+                              }}
+                              className="border border-slate-200 bg-white p-1.5 rounded-lg text-xs font-semibold focus:border-indigo-500 outline-none w-full max-w-[180px] cursor-pointer"
+                            >
+                              <option value="">-- Choose Chapter --</option>
+                              {sortedChapters.map(c => (
+                                <option key={c.id} value={c.id}>
+                                  {c.rootName} &gt; {c.level1Name} &gt; {c.name}
+                                </option>
+                              ))}
+                            </select>
+                            {p.matchedChapterName && (
+                              <div className="text-[9px] text-indigo-600 font-extrabold mt-0.5 truncate max-w-[180px]">
+                                🏫 Chapter: "{p.matchedChapterName}"
+                              </div>
+                            )}
+                          </td>
+
                           {/* Group assignment dropdown */}
                           <td className="p-2">
                             <select
@@ -1944,7 +2060,7 @@ export default function PlayerManager({
                         </button>
                       </div>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                         <div className="space-y-1">
                           <label className="text-[10px] font-bold text-slate-400 uppercase">Name</label>
                           <input 
@@ -1971,6 +2087,17 @@ export default function PlayerManager({
                             className="w-full border border-slate-200 p-2 rounded-lg text-xs font-medium outline-none focus:border-indigo-500"
                             type="number"
                           />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-slate-400 uppercase">Gender</label>
+                          <select 
+                            value={editForm.gender}
+                            onChange={e => setEditForm({ ...editForm, gender: e.target.value })}
+                            className="w-full border border-slate-200 p-2 rounded-lg text-xs font-medium outline-none focus:border-indigo-500 bg-white"
+                          >
+                            <option value="Male">Male</option>
+                            <option value="Female">Female</option>
+                          </select>
                         </div>
                       </div>
 
@@ -2046,6 +2173,15 @@ export default function PlayerManager({
                               {p.mobile && (
                                 <span className="flex items-center gap-1 px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded text-[10px] font-bold border border-indigo-100/60">
                                   <Phone className="w-2.5 h-2.5 text-indigo-500" /> {p.mobile}
+                                </span>
+                              )}
+                              {p.gender && (
+                                <span className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold border ${
+                                  p.gender === 'Female' 
+                                    ? 'bg-rose-50 text-rose-700 border-rose-100/60' 
+                                    : 'bg-blue-50 text-blue-700 border-blue-100/60'
+                                }`}>
+                                  {p.gender === 'Female' ? '♀' : '♂'} {p.gender}
                                 </span>
                               )}
                               {p.age && (

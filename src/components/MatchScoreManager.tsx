@@ -275,7 +275,10 @@ export default function MatchScoreManager({
 
   // Helper to adjust team points
   const adjustTeamPoints = async (winnerPlayerId: string, delta: number, fixture?: any) => {
-    if (fixture?.groupName?.toLowerCase().includes('family')) {
+    if (
+      fixture?.groupName?.toLowerCase().includes('family') ||
+      fixture?.groupName?.toLowerCase().includes('kids')
+    ) {
       return;
     }
     try {
@@ -283,7 +286,10 @@ export default function MatchScoreManager({
       const teamDoc = teamsSnapshot.docs.find(doc => doc.data().playerIds?.includes(winnerPlayerId));
       if (teamDoc) {
         const teamData = teamDoc.data();
-        if (teamData?.name?.toLowerCase().includes('family')) {
+        if (
+          teamData?.name?.toLowerCase().includes('family') ||
+          teamData?.name?.toLowerCase().includes('kids')
+        ) {
           return;
         }
         await updateDoc(teamDoc.ref, { points: increment(delta) });
@@ -296,6 +302,11 @@ export default function MatchScoreManager({
   // Update a single score field locally and sync to Firestore if live
   const updateScore = async (fixtureId: string, field: string, delta: number) => {
     if (!canScore) return;
+    const fixture = fixtures.find(f => f.id === fixtureId);
+    if (fixture && !fixture.court) {
+      alert("Assigning a court is mandatory before you can enter scores.");
+      return;
+    }
     const currentScores = scores[fixtureId] || { p1g1: 0, p2g1: 0, p1g2: 0, p2g2: 0, p1g3: 0, p2g3: 0 };
     
     // In professional badminton, max score is capped at 30 points
@@ -311,7 +322,6 @@ export default function MatchScoreManager({
     }));
 
     // If it's currently pending or live (not completed), update its status to 'live' and save current draft scores
-    const fixture = fixtures.find(f => f.id === fixtureId);
     if (fixture) {
       // Detect if a set was completed by this specific score update
       const matchFields = field.match(/^p(1|2)g([1-3])$/);
@@ -436,9 +446,13 @@ export default function MatchScoreManager({
   // Save the score as completed
   const saveScore = async (fixtureId: string) => {
     if (saving) return;
-    const s = scores[fixtureId] || { p1g1: 0, p2g1: 0, p1g2: 0, p2g2: 0, p1g3: 0, p2g3: 0 };
     const fixture = fixtures.find(f => f.id === fixtureId);
     if (!fixture) return;
+    if (!fixture.court) {
+      alert("Assigning a court is mandatory before you can enter scores.");
+      return;
+    }
+    const s = scores[fixtureId] || { p1g1: 0, p2g1: 0, p1g2: 0, p2g2: 0, p1g3: 0, p2g3: 0 };
 
     setSaving(true);
     const maxPoints = Number(fixture.pointsTarget) || (fixture.matchType === 'league' ? 15 : 21);
@@ -881,9 +895,13 @@ export default function MatchScoreManager({
                           className="text-[9px] font-extrabold bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5 text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer max-w-[95px]"
                         >
                           <option value="">No Court</option>
-                          {courts.map(courtOpt => (
-                            <option key={courtOpt} value={courtOpt}>{courtOpt}</option>
-                          ))}
+                          {courts.map(courtOpt => {
+                            const isOtherLive = fixtures.some(x => x.status === 'live' && x.court === courtOpt && x.id !== f.id);
+                            if (courtOpt === 'Court 1' && isOtherLive) return null;
+                            return (
+                              <option key={courtOpt} value={courtOpt}>{courtOpt}</option>
+                            );
+                          })}
                         </select>
                       </div>
 
@@ -1031,6 +1049,8 @@ export default function MatchScoreManager({
               <div className="flex flex-wrap gap-1">
                 {courts.map(courtOpt => {
                   const isSelected = activeFixture?.court === courtOpt;
+                  const isOtherLive = fixtures.some(f => f.status === 'live' && f.court === courtOpt && f.id !== activeFixture?.id);
+                  if (courtOpt === 'Court 1' && isOtherLive) return null;
                   return (
                     <button
                       key={courtOpt}

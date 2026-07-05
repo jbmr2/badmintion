@@ -429,6 +429,148 @@ async function startServer() {
     }
   });
 
+  // GET consolidated tournament data (Meta + Players + Groups + Fixtures + Matches + Roots + Standings)
+  app.get('/api/tournaments/:tournamentId/consolidated', checkDb, async (req, res) => {
+    try {
+      const { db, fs } = req;
+      const { doc, getDoc, collection, getDocs } = fs;
+      const { tournamentId } = req.params;
+
+      // 1. Get Tournament config
+      const tournamentRef = doc(db, 'tournaments', tournamentId);
+      const tournamentSnap = await getDoc(tournamentRef);
+      if (!tournamentSnap.exists()) {
+        return res.status(404).json({ error: 'Tournament not found' });
+      }
+      const tournamentData = { id: tournamentSnap.id, ...tournamentSnap.data() };
+
+      // 2. Get Players
+      const playersSnap = await getDocs(collection(db, `tournaments/${tournamentId}/players`));
+      const players = playersSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const playerMap = {};
+      players.forEach(p => {
+        playerMap[p.id] = p.name;
+      });
+
+      // 3. Get Groups
+      const groupsSnap = await getDocs(collection(db, `tournaments/${tournamentId}/groups`));
+      const groups = groupsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      // 4. Get Fixtures
+      const fixturesSnap = await getDocs(collection(db, `tournaments/${tournamentId}/fixtures`));
+      const fixtures = fixturesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      // 5. Get Matches
+      const matchesSnap = await getDocs(collection(db, `tournaments/${tournamentId}/matches`));
+      const matches = matchesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      // 6. Get Roots (Hierarchy)
+      const rootsSnap = await getDocs(collection(db, `tournaments/${tournamentId}/roots`));
+      const roots = rootsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      // 7. Calculate standings
+      const groupedStats = {};
+      groups.forEach(group => {
+        groupedStats[group.name] = {};
+        if (group.playerIds) {
+          group.playerIds.forEach(playerId => {
+            const playerName = playerMap[playerId];
+            if (playerName) {
+              groupedStats[group.name][playerName] = {
+                playerId,
+                wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0
+              };
+            }
+          });
+        }
+      });
+
+      matches.forEach(match => {
+        const fixture = fixtures.find(f => f.id === match.fixtureId);
+        if (!fixture || !fixture.groupName) return;
+
+        const groupName = fixture.groupName;
+        const p1 = fixture.player1Name;
+        const p2 = fixture.player2Name;
+        const s = match.scores;
+
+        if (fixture.matchType && fixture.matchType !== 'league') return;
+
+        if (!groupedStats[groupName]) groupedStats[groupName] = {};
+        if (!groupedStats[groupName][p1]) {
+          groupedStats[groupName][p1] = { playerId: fixture.player1Id, wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0 };
+        }
+        if (!groupedStats[groupName][p2]) {
+          groupedStats[groupName][p2] = { playerId: fixture.player2Id, wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0 };
+        }
+
+        if (match.winner === 'player1') groupedStats[groupName][p1].wins++;
+        else if (match.winner === 'player2') groupedStats[groupName][p1].losses++;
+
+        groupedStats[groupName][p1].gamesWon += match.p1Games || 0;
+        groupedStats[groupName][p1].gamesLost += match.p2Games || 0;
+        groupedStats[groupName][p1].pointsScored += (s.p1g1 || 0) + (s.p1g2 || 0) + (s.p1g3 || 0);
+        groupedStats[groupName][p1].pointsAgainst += (s.p2g1 || 0) + (s.p2g2 || 0) + (s.p2g3 || 0);
+
+        if (match.winner === 'player2') groupedStats[groupName][p2].wins++;
+        else if (match.winner === 'player1') groupedStats[groupName][p2].losses++;
+
+        groupedStats[groupName][p2].gamesWon += match.p2Games || 0;
+        groupedStats[groupName][p2].gamesLost += match.p1Games || 0;
+        groupedStats[groupName][p2].pointsScored += (s.p2g1 || 0) + (s.p2g2 || 0) + (s.p2g3 || 0);
+        groupedStats[groupName][p2].pointsAgainst += (s.p1g1 || 0) + (s.p1g2 || 0) + (s.p1g3 || 0);
+      });
+
+      const isRoundRobinA = (tournamentData.tournamentType || '').toLowerCase().includes('round robin a') || (tournamentData.tournamentType || '').toLowerCase().includes('robin a');
+      const winPointsValue = tournamentData.winPoints !== undefined ? Number(tournamentData.winPoints) : 2;
+      const lossPointsValue = tournamentData.lossPoints !== undefined ? Number(tournamentData.lossPoints) : 0;
+
+      const standings = {};
+      Object.entries(groupedStats).forEach(([groupName, groupPlayers]) => {
+        standings[groupName] = Object.entries(groupPlayers).map(([playerName, stats]) => {
+          const played = stats.wins + stats.losses;
+          const matchPoints = (stats.wins * winPointsValue) + (stats.losses * lossPointsValue);
+          const gameDiff = stats.gamesWon - stats.gamesLost;
+          const pointDiff = stats.pointsScored - stats.pointsAgainst;
+          return {
+            playerId: stats.playerId,
+            playerName,
+            played,
+            wins: stats.wins,
+            losses: stats.losses,
+            matchPoints,
+            gamesWon: stats.gamesWon,
+            gamesLost: stats.gamesLost,
+            gameDiff,
+            pointsScored: stats.pointsScored,
+            pointsAgainst: stats.pointsAgainst,
+            pointDiff
+          };
+        }).sort((a, b) => {
+          if (isRoundRobinA) {
+            if (b.wins !== a.wins) return b.wins - a.wins;
+          }
+          if (b.matchPoints !== a.matchPoints) return b.matchPoints - a.matchPoints;
+          if (b.gameDiff !== a.gameDiff) return b.gameDiff - a.gameDiff;
+          if (b.pointDiff !== a.pointDiff) return b.pointDiff - a.pointDiff;
+          return 0;
+        });
+      });
+
+      res.json({
+        tournament: tournamentData,
+        players,
+        groups,
+        fixtures,
+        matches,
+        roots,
+        standings
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   function serveStaticProduction(appInstance) {
     const distPath = path.join(__dirname, 'dist');
     const indexHtmlPath = path.join(distPath, 'index.html');

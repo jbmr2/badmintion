@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, query, onSnapshot, addDoc, updateDoc, doc, deleteDoc, getDocs, writeBatch, increment } from 'firebase/firestore';
 import { 
@@ -15,7 +15,9 @@ import {
   Check, 
   HelpCircle,
   TrendingUp,
-  AlertCircle
+  AlertCircle,
+  Flame,
+  Search
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import PlayerMatchesModal from './PlayerMatchesModal';
@@ -50,9 +52,15 @@ export default function PointsTable({
   const [players, setPlayers] = useState<any[]>([]);
   const [tournament, setTournament] = useState<any | null>(null);
   const [generating, setGenerating] = useState(false);
-  const [activeTab, setActiveTab] = useState<'standings' | 'brackets' | 'schedule'>('standings');
+  const [activeTab, setActiveTab] = useState<'standings' | 'brackets' | 'schedule' | 'leaderboards'>('standings');
   const [fixtureToDelete, setFixtureToDelete] = useState<any | null>(null);
   const [selectedPlayerForMatches, setSelectedPlayerForMatches] = useState<{ id: string; name: string } | null>(null);
+
+  // States for Interactive Visual Brackets & Player Leaderboards
+  const bracketContainerRef = useRef<HTMLDivElement>(null);
+  const [connections, setConnections] = useState<Array<{ path: string; isCompleted: boolean }>>([]);
+  const [leaderboardSort, setLeaderboardSort] = useState<'pointsScored' | 'longestStreak' | 'pointDiff' | 'winRate'>('pointsScored');
+  const [leaderboardSearch, setLeaderboardSearch] = useState('');
 
   const safeConfirm = (msg: string): boolean => {
     try {
@@ -259,6 +267,19 @@ export default function PointsTable({
     return null;
   };
 
+  const isPlayerFemale = (pId?: string, groupName?: string): boolean => {
+    if (!pId) return false;
+    const p = players.find(x => x.id === pId);
+    if (p?.gender === 'Female' || p?.gender?.toLowerCase() === 'female') {
+      return true;
+    }
+    const gLower = (groupName || '').toLowerCase();
+    if ((gLower.includes('women') || gLower.includes('female')) && !gLower.includes('mixed') && !gLower.includes('open')) {
+      return true;
+    }
+    return false;
+  };
+
   // Calculate points grouped by groupName
   const groupedStats: Record<string, Record<string, any>> = {};
   
@@ -284,21 +305,24 @@ export default function PointsTable({
               groupedStats[group.name][pairName] = {
                 playerId: p.id, // we can use the main player's ID for references
                 partnerId: partner.id,
-                wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0 
+                wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0,
+                femaleBonusPoints: 0
               };
               processedPlayerIds.add(p.id);
               processedPlayerIds.add(partner.id);
             } else {
               groupedStats[group.name][p.name] = {
                 playerId: p.id,
-                wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0 
+                wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0,
+                femaleBonusPoints: 0
               };
               processedPlayerIds.add(p.id);
             }
           } else {
             groupedStats[group.name][p.name] = {
               playerId: p.id,
-              wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0 
+              wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0,
+              femaleBonusPoints: 0
             };
             processedPlayerIds.add(p.id);
           }
@@ -310,12 +334,15 @@ export default function PointsTable({
             if (playerName) {
                 groupedStats[group.name][playerName] = { 
                     playerId,
-                    wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0 
+                    wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0,
+                    femaleBonusPoints: 0
                 };
             }
         });
       }
   });
+
+  const awardedFemaleBonuses = new Set<string>();
 
   matches.forEach(match => {
       const fixture = fixtures.find(f => f.id === match.fixtureId);
@@ -338,13 +365,17 @@ export default function PointsTable({
       if (!groupedStats[groupName][p1]) {
         groupedStats[groupName][p1] = { 
           playerId: isDoublesMatch ? fixture.player1aId : fixture.player1Id, 
-          wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0 
+          partnerId: isDoublesMatch ? fixture.player1bId : undefined,
+          wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0,
+          femaleBonusPoints: 0
         };
       }
       if (!groupedStats[groupName][p2]) {
         groupedStats[groupName][p2] = { 
           playerId: isDoublesMatch ? fixture.player2aId : fixture.player2Id, 
-          wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0 
+          partnerId: isDoublesMatch ? fixture.player2bId : undefined,
+          wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0,
+          femaleBonusPoints: 0
         };
       }
 
@@ -365,6 +396,46 @@ export default function PointsTable({
       groupedStats[groupName][p2].gamesLost += match.p1Games || 0;
       groupedStats[groupName][p2].pointsScored += (s.p2g1 || 0) + (s.p2g2 || 0) + (s.p2g3 || 0);
       groupedStats[groupName][p2].pointsAgainst += (s.p1g1 || 0) + (s.p1g2 || 0) + (s.p1g3 || 0);
+
+      // Award female player bonus points (+5 points flat for 1st match played)
+      const isFamilyCategory = fixture.groupName?.toLowerCase().includes('family') || fixture.groupName?.toLowerCase().includes('kids');
+      if (!isFamilyCategory) {
+        // Team 1
+        const t1Player1 = isDoublesMatch ? fixture.player1aId : fixture.player1Id;
+        const t1Player2 = isDoublesMatch ? fixture.player1bId : null;
+        if (t1Player1 && isPlayerFemale(t1Player1, fixture.groupName)) {
+          const key = `${groupName}-${t1Player1}`;
+          if (!awardedFemaleBonuses.has(key)) {
+            awardedFemaleBonuses.add(key);
+            groupedStats[groupName][p1].femaleBonusPoints = (groupedStats[groupName][p1].femaleBonusPoints || 0) + 5;
+          }
+        }
+        if (t1Player2 && isPlayerFemale(t1Player2, fixture.groupName)) {
+          const key = `${groupName}-${t1Player2}`;
+          if (!awardedFemaleBonuses.has(key)) {
+            awardedFemaleBonuses.add(key);
+            groupedStats[groupName][p1].femaleBonusPoints = (groupedStats[groupName][p1].femaleBonusPoints || 0) + 5;
+          }
+        }
+
+        // Team 2
+        const t2Player1 = isDoublesMatch ? fixture.player2aId : fixture.player2Id;
+        const t2Player2 = isDoublesMatch ? fixture.player2bId : null;
+        if (t2Player1 && isPlayerFemale(t2Player1, fixture.groupName)) {
+          const key = `${groupName}-${t2Player1}`;
+          if (!awardedFemaleBonuses.has(key)) {
+            awardedFemaleBonuses.add(key);
+            groupedStats[groupName][p2].femaleBonusPoints = (groupedStats[groupName][p2].femaleBonusPoints || 0) + 5;
+          }
+        }
+        if (t2Player2 && isPlayerFemale(t2Player2, fixture.groupName)) {
+          const key = `${groupName}-${t2Player2}`;
+          if (!awardedFemaleBonuses.has(key)) {
+            awardedFemaleBonuses.add(key);
+            groupedStats[groupName][p2].femaleBonusPoints = (groupedStats[groupName][p2].femaleBonusPoints || 0) + 5;
+          }
+        }
+      }
   });
 
   // Calculate sorted rankings for each group
@@ -373,10 +444,19 @@ export default function PointsTable({
   const lossPointsValue = tournament?.lossPoints !== undefined ? Number(tournament.lossPoints) : 0;
 
   const groupRankings: Record<string, StandingPlayer[]> = {};
+
   Object.entries(groupedStats).forEach(([groupName, groupPlayers]) => {
     groupRankings[groupName] = Object.entries(groupPlayers).map(([playerName, stats]: any) => {
       const played = stats.wins + stats.losses;
-      const matchPoints = (stats.wins * winPointsValue) + (stats.losses * lossPointsValue);
+      let matchPoints = (stats.wins * winPointsValue) + (stats.losses * lossPointsValue);
+      
+      const isFamilyGroup = groupName.toLowerCase().includes('family') || groupName.toLowerCase().includes('kids');
+      if (!isFamilyGroup) {
+        matchPoints += stats.femaleBonusPoints || 0;
+      } else {
+        matchPoints = 0;
+      }
+
       const gameDiff = stats.gamesWon - stats.gamesLost;
       const pointDiff = stats.pointsScored - stats.pointsAgainst;
       return {
@@ -429,7 +509,10 @@ export default function PointsTable({
   };
 
   const adjustTeamPoints = async (winnerPlayerId: string, delta: number, fixture?: any) => {
-    if (fixture?.groupName?.toLowerCase().includes('family')) {
+    if (
+      fixture?.groupName?.toLowerCase().includes('family') ||
+      fixture?.groupName?.toLowerCase().includes('kids')
+    ) {
       return;
     }
     try {
@@ -437,7 +520,10 @@ export default function PointsTable({
       const teamDoc = teamsSnapshot.docs.find(doc => doc.data().playerIds?.includes(winnerPlayerId));
       if (teamDoc) {
         const teamData = teamDoc.data();
-        if (teamData?.name?.toLowerCase().includes('family')) {
+        if (
+          teamData?.name?.toLowerCase().includes('family') ||
+          teamData?.name?.toLowerCase().includes('kids')
+        ) {
           return;
         }
         await updateDoc(teamDoc.ref, { points: increment(delta) });
@@ -929,7 +1015,7 @@ export default function PointsTable({
 
     if (isGrandFinal) {
       return (
-        <div key={f.id} className="bg-slate-900 text-white border-2 border-amber-400/40 rounded-3xl p-5 shadow-xl relative group overflow-hidden hover:border-amber-400 transition-all duration-300">
+        <div key={f.id} id={`match-card-${stageLabel}-${idx}`} className="bg-slate-900 text-white border-2 border-amber-400/40 rounded-3xl p-5 shadow-xl relative group overflow-hidden hover:border-amber-400 transition-all duration-300 w-[260px] mx-auto shrink-0">
           <div className="absolute top-0 right-0 p-2.5">
             <Award className="w-6 h-6 text-amber-400 animate-pulse" />
           </div>
@@ -1062,7 +1148,7 @@ export default function PointsTable({
 
     // Default design for Pre-Quarters, Quarters, Semis
     return (
-      <div key={f.id} className="bg-white border border-slate-150 rounded-2xl shadow-sm relative group overflow-hidden hover:border-slate-300 hover:shadow-md transition duration-200">
+      <div key={f.id} id={`match-card-${stageLabel}-${idx}`} className="bg-white border border-slate-150 rounded-2xl shadow-sm relative group overflow-hidden hover:border-slate-300 hover:shadow-md transition duration-200 w-[260px] mx-auto shrink-0">
         {/* Match Header info */}
         <div className="flex justify-between items-center text-[9px] font-black text-slate-400 uppercase tracking-widest bg-slate-50 border-b border-slate-100 px-3 py-1.5">
           <span>{stageLabel} {idx + 1} ({f.pointsTarget || '21'} pts) {f.court ? `• ${f.court}` : ''}</span>
@@ -1192,6 +1278,233 @@ export default function PointsTable({
     );
   };
 
+  // Helper to render placeholder card to keep visual tree symmetry
+  const renderBracketPlaceholderCard = (stageLabel: string, idx: number) => {
+    return (
+      <div 
+        id={`match-card-${stageLabel}-${idx}`}
+        className="bg-slate-50/40 border-2 border-dashed border-slate-200 rounded-2xl p-4 text-center flex flex-col justify-center items-center h-[120px] w-[260px] mx-auto select-none shrink-0"
+      >
+        <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider mb-1">
+          {stageLabel === 'PQ' ? 'Pre-Quarter' : stageLabel === 'QF' ? 'Quarter Final' : stageLabel === 'SF' ? 'Semi Final' : 'Grand Final'} {idx + 1}
+        </span>
+        <p className="text-[10px] font-bold text-slate-400/80">Waiting for Seeding</p>
+      </div>
+    );
+  };
+
+  // Leaderboard Calculation Hook
+  const computedLeaderboard = useMemo(() => {
+    const statsMap: Record<string, any> = {};
+
+    // Initialize all registered tournament players
+    players.forEach(p => {
+      statsMap[p.id] = {
+        id: p.id,
+        name: p.name,
+        pointsScored: 0,
+        pointsAgainst: 0,
+        pointDiff: 0,
+        matchesPlayed: 0,
+        wins: 0,
+        losses: 0,
+        winRate: 0,
+        currentStreak: 0,
+        longestStreak: 0,
+        streakHistory: []
+      };
+    });
+
+    // Sort matches by finalizedAt
+    const sortedMatches = [...matches].sort((a, b) => (a.finalizedAt || 0) - (b.finalizedAt || 0));
+
+    sortedMatches.forEach(match => {
+      const fixture = fixtures.find(f => f.id === match.fixtureId);
+      if (!fixture) return;
+
+      const isDoublesMatch = !!(fixture.isDoubles || fixture.player1aId || fixture.player1bId || fixture.player2aId || fixture.player2bId);
+      
+      const team1Ids = isDoublesMatch 
+        ? [fixture.player1aId, fixture.player1bId].filter(Boolean)
+        : [fixture.player1Id].filter(Boolean);
+      const team2Ids = isDoublesMatch 
+        ? [fixture.player2aId, fixture.player2bId].filter(Boolean)
+        : [fixture.player2Id].filter(Boolean);
+
+      const s = match.scores || {};
+      const team1Points = (s.p1g1 || 0) + (s.p1g2 || 0) + (s.p1g3 || 0);
+      const team2Points = (s.p2g1 || 0) + (s.p2g2 || 0) + (s.p2g3 || 0);
+
+      const winnerKey = match.winner;
+
+      team1Ids.forEach(pid => {
+        if (!statsMap[pid]) {
+          statsMap[pid] = {
+            id: pid,
+            name: playerMap[pid] || pid,
+            pointsScored: 0, pointsAgainst: 0, pointDiff: 0,
+            matchesPlayed: 0, wins: 0, losses: 0, winRate: 0,
+            currentStreak: 0, longestStreak: 0, streakHistory: []
+          };
+        }
+        const pStats = statsMap[pid];
+        pStats.matchesPlayed++;
+        pStats.pointsScored += team1Points;
+        pStats.pointsAgainst += team2Points;
+        const isWin = winnerKey === 'player1';
+        if (isWin) pStats.wins++;
+        else pStats.losses++;
+        pStats.streakHistory.push(isWin);
+      });
+
+      team2Ids.forEach(pid => {
+        if (!statsMap[pid]) {
+          statsMap[pid] = {
+            id: pid,
+            name: playerMap[pid] || pid,
+            pointsScored: 0, pointsAgainst: 0, pointDiff: 0,
+            matchesPlayed: 0, wins: 0, losses: 0, winRate: 0,
+            currentStreak: 0, longestStreak: 0, streakHistory: []
+          };
+        }
+        const pStats = statsMap[pid];
+        pStats.matchesPlayed++;
+        pStats.pointsScored += team2Points;
+        pStats.pointsAgainst += team1Points;
+        const isWin = winnerKey === 'player2';
+        if (isWin) pStats.wins++;
+        else pStats.losses++;
+        pStats.streakHistory.push(isWin);
+      });
+    });
+
+    Object.values(statsMap).forEach(pStats => {
+      pStats.pointDiff = pStats.pointsScored - pStats.pointsAgainst;
+      pStats.winRate = pStats.matchesPlayed > 0 ? (pStats.wins / pStats.matchesPlayed) * 100 : 0;
+
+      let current = 0;
+      let longest = 0;
+      pStats.streakHistory.forEach((isWin: boolean) => {
+        if (isWin) {
+          current++;
+          if (current > longest) longest = current;
+        } else {
+          current = 0;
+        }
+      });
+      pStats.currentStreak = current;
+      pStats.longestStreak = longest;
+    });
+
+    return Object.values(statsMap);
+  }, [players, matches, fixtures, playerMap]);
+
+  // Leaderboard filter & sorting
+  const filteredLeaderboard = useMemo(() => {
+    let list = computedLeaderboard;
+    
+    if (leaderboardSearch.trim()) {
+      const q = leaderboardSearch.toLowerCase().trim();
+      list = list.filter(p => p.name.toLowerCase().includes(q));
+    }
+
+    list.sort((a, b) => {
+      if (leaderboardSort === 'pointsScored') {
+        return b.pointsScored - a.pointsScored;
+      }
+      if (leaderboardSort === 'longestStreak') {
+        if (b.longestStreak !== a.longestStreak) {
+          return b.longestStreak - a.longestStreak;
+        }
+        return b.wins - a.wins;
+      }
+      if (leaderboardSort === 'pointDiff') {
+        return b.pointDiff - a.pointDiff;
+      }
+      if (leaderboardSort === 'winRate') {
+        const aPlayed = a.matchesPlayed > 0 ? 1 : 0;
+        const bPlayed = b.matchesPlayed > 0 ? 1 : 0;
+        if (bPlayed !== aPlayed) return bPlayed - aPlayed;
+        if (b.winRate !== a.winRate) return b.winRate - a.winRate;
+        return b.wins - a.wins;
+      }
+      return 0;
+    });
+
+    return list;
+  }, [computedLeaderboard, leaderboardSort, leaderboardSearch]);
+
+  // Bracket connector lines drawer
+  const updateBracketLines = () => {
+    if (!bracketContainerRef.current || activeTab !== 'brackets') return;
+    const container = bracketContainerRef.current;
+    
+    // Find first child which is the relative inner container
+    const inner = container.firstElementChild as HTMLElement;
+    if (!inner) return;
+    
+    const innerRect = inner.getBoundingClientRect();
+    const newConnections: Array<{ path: string; isCompleted: boolean }> = [];
+
+    const showPQ = preQuarters.length > 0;
+
+    const connectStructuralRounds = (stageA: string, sizeA: number, stageB: string, sizeB: number) => {
+      for (let idx = 0; idx < sizeA; idx++) {
+        const elA = document.getElementById(`match-card-${stageA}-${idx}`);
+        const targetIdx = Math.floor(idx / 2);
+        const elB = document.getElementById(`match-card-${stageB}-${targetIdx}`);
+
+        if (elA && elB) {
+          const rectA = elA.getBoundingClientRect();
+          const rectB = elB.getBoundingClientRect();
+
+          const x1 = rectA.right - innerRect.left;
+          const y1 = rectA.top + rectA.height / 2 - innerRect.top;
+          
+          const x2 = rectB.left - innerRect.left;
+          const y2 = rectB.top + rectB.height / 2 - innerRect.top;
+
+          const controlOffset = Math.min(50, Math.abs(x2 - x1) / 2);
+          const path = `M ${x1} ${y1} C ${x1 + controlOffset} ${y1}, ${x2 - controlOffset} ${y2}, ${x2} ${y2}`;
+
+          // Highlight path as completed if stageA match was completed and the winner matches
+          let isCompleted = false;
+          if (stageA === 'PQ' && preQuarters[idx]?.status === 'completed') isCompleted = true;
+          if (stageA === 'QF' && quarters[idx]?.status === 'completed') isCompleted = true;
+          if (stageA === 'SF' && semis[idx]?.status === 'completed') isCompleted = true;
+
+          newConnections.push({ path, isCompleted });
+        }
+      }
+    };
+
+    if (showPQ) {
+      connectStructuralRounds('PQ', 8, 'QF', 4);
+      connectStructuralRounds('QF', 4, 'SF', 2);
+      connectStructuralRounds('SF', 2, 'FINAL', 1);
+    } else {
+      connectStructuralRounds('QF', 4, 'SF', 2);
+      connectStructuralRounds('SF', 2, 'FINAL', 1);
+    }
+
+    setConnections(newConnections);
+  };
+
+  useEffect(() => {
+    if (activeTab === 'brackets') {
+      const timer = setTimeout(() => {
+        updateBracketLines();
+      }, 150);
+
+      window.addEventListener('resize', updateBracketLines);
+      
+      return () => {
+        clearTimeout(timer);
+        window.removeEventListener('resize', updateBracketLines);
+      };
+    }
+  }, [activeTab, preQuarters, quarters, semis, finals]);
+
   return (
     <div className="space-y-8 font-sans">
       
@@ -1227,6 +1540,14 @@ export default function PointsTable({
             {(quarters.length > 0 || semis.length > 0 || finals.length > 0) && (
               <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
             )}
+          </button>
+          <button
+            onClick={() => setActiveTab('leaderboards')}
+            className={`px-4 py-2 text-xs font-extrabold rounded-xl transition flex items-center gap-1 ${
+              activeTab === 'leaderboards' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            🥇 Player Leaderboards
           </button>
           {canEdit && (
             <button
@@ -1403,7 +1724,7 @@ export default function PointsTable({
           >
             {/* Quick alert if no brackets scheduled */}
             {preQuarters.length === 0 && quarters.length === 0 && semis.length === 0 && finals.length === 0 && (
-              <div className="bg-slate-50 border border-slate-200 p-8 rounded-3xl text-center">
+              <div className="bg-white border border-slate-100 p-10 rounded-3xl text-center shadow-sm">
                 <AlertCircle className="w-10 h-10 text-slate-400 mx-auto mb-3" />
                 <h4 className="font-extrabold text-slate-800">No Bracket Matches Scheduled</h4>
                 <p className="text-slate-500 text-xs mt-1 max-w-sm mx-auto">
@@ -1418,80 +1739,327 @@ export default function PointsTable({
               </div>
             )}
 
-            {/* Bracket columns mapping */}
-            <div className="overflow-x-auto pb-4 -mx-4 px-4 sm:mx-0 sm:px-0 scrollbar-thin">
-              <div className={`flex md:grid ${preQuarters.length > 0 ? 'md:grid-cols-4' : 'md:grid-cols-3'} gap-6 items-start min-w-[max-content] md:min-w-0 md:max-w-none`}>
-              
-              {/* STAGE PRE-QUARTER: PRE-QUARTERS */}
-              {preQuarters.length > 0 && (
-                <div className="space-y-4 w-[280px] md:w-auto shrink-0">
-                  <div className="bg-slate-900 text-white p-3.5 rounded-2xl flex items-center justify-between shadow-sm">
-                    <span className="font-black text-xs uppercase tracking-widest text-indigo-400">Pre-Quarters</span>
-                    <span className="text-[10px] bg-indigo-950 px-2 py-0.5 rounded font-bold font-mono">{preQuarters.length} Matches</span>
+            {preQuarters.length > 0 || quarters.length > 0 || semis.length > 0 || finals.length > 0 ? (
+              <div 
+                ref={bracketContainerRef} 
+                className="overflow-x-auto pb-6 -mx-4 px-4 sm:mx-0 sm:px-0 scrollbar-thin select-none"
+              >
+                <div className="relative min-w-[1150px] pb-4 pr-12">
+                  
+                  {/* Dynamic SVG Connection Overlay */}
+                  <svg className="absolute top-0 left-0 w-full h-full pointer-events-none z-10">
+                    {connections.map((conn, i) => (
+                      <path
+                        key={i}
+                        d={conn.path}
+                        fill="none"
+                        stroke={conn.isCompleted ? '#6366f1' : '#cbd5e1'}
+                        strokeWidth={conn.isCompleted ? '3' : '2'}
+                        strokeDasharray={conn.isCompleted ? undefined : '4 4'}
+                        className="transition-all duration-300"
+                      />
+                    ))}
+                  </svg>
+
+                  {/* Symmetrical Columns Row */}
+                  <div className={`relative z-20 grid ${preQuarters.length > 0 ? 'grid-cols-4' : 'grid-cols-3'} gap-16 items-stretch min-h-[720px]`}>
+                    
+                    {/* STAGE PQ: PRE-QUARTERS */}
+                    {preQuarters.length > 0 && (
+                      <div className="flex flex-col justify-between h-full space-y-4">
+                        <div className="bg-slate-900 text-white p-3.5 rounded-2xl flex items-center justify-between shadow-sm">
+                          <span className="font-black text-xs uppercase tracking-widest text-indigo-400">Pre-Quarters</span>
+                          <span className="text-[10px] bg-indigo-950 px-2 py-0.5 rounded font-bold font-mono">{preQuarters.length} Matches</span>
+                        </div>
+                        <div className="flex flex-col justify-around flex-grow py-4 space-y-4">
+                          {preQuarters.map((f, idx) => renderBracketMatchCard(f, idx, 'PQ'))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* STAGE QF: QUARTER FINALS */}
+                    <div className="flex flex-col justify-between h-full space-y-4">
+                      <div className="bg-slate-900 text-white p-3.5 rounded-2xl flex items-center justify-between shadow-sm">
+                        <span className="font-black text-xs uppercase tracking-widest text-indigo-400">Quarter Finals</span>
+                        <span className="text-[10px] bg-indigo-950 px-2 py-0.5 rounded font-bold font-mono">
+                          {quarters.length > 0 ? `${quarters.length} Matches` : '4 Slots'}
+                        </span>
+                      </div>
+                      <div className="flex flex-col justify-around flex-grow py-4 space-y-4">
+                        {(quarters.length > 0 ? quarters : Array(4).fill(null)).map((f, idx) => 
+                          f ? renderBracketMatchCard(f, idx, 'QF') : renderBracketPlaceholderCard('QF', idx)
+                        )}
+                      </div>
+                    </div>
+
+                    {/* STAGE SF: SEMI FINALS */}
+                    <div className="flex flex-col justify-between h-full space-y-4">
+                      <div className="bg-slate-900 text-white p-3.5 rounded-2xl flex items-center justify-between shadow-sm">
+                        <span className="font-black text-xs uppercase tracking-widest text-emerald-400">Semi Finals</span>
+                        <span className="text-[10px] bg-emerald-950 px-2 py-0.5 rounded font-bold font-mono">
+                          {semis.length > 0 ? `${semis.length} Matches` : '2 Slots'}
+                        </span>
+                      </div>
+                      <div className="flex flex-col justify-around flex-grow py-4 space-y-4">
+                        {(semis.length > 0 ? semis : Array(2).fill(null)).map((f, idx) => 
+                          f ? renderBracketMatchCard(f, idx, 'SF') : renderBracketPlaceholderCard('SF', idx)
+                        )}
+                      </div>
+                    </div>
+
+                    {/* STAGE FINAL: GRAND FINAL */}
+                    <div className="flex flex-col justify-between h-full space-y-4">
+                      <div className="bg-slate-900 text-white p-3.5 rounded-2xl flex items-center justify-between shadow-sm">
+                        <span className="font-black text-xs uppercase tracking-widest text-amber-400">Grand Final</span>
+                        <span className="text-[10px] bg-amber-950 px-2 py-0.5 rounded font-bold font-mono">
+                          {finals.length > 0 ? '1 Match' : '1 Slot'}
+                        </span>
+                      </div>
+                      <div className="flex flex-col justify-around flex-grow py-4 space-y-4">
+                        {(finals.length > 0 ? finals : Array(1).fill(null)).map((f, idx) => 
+                          f ? renderBracketMatchCard(f, idx, 'FINAL', true) : renderBracketPlaceholderCard('FINAL', idx)
+                        )}
+                      </div>
+                    </div>
+
                   </div>
-
-                  <div className="space-y-3.5">
-                    {preQuarters.map((f, idx) => renderBracketMatchCard(f, idx, 'PQ'))}
-                  </div>
-                </div>
-              )}
-
-              {/* STAGE A: QUARTER FINALS */}
-              <div className="space-y-4 w-[280px] md:w-auto shrink-0">
-                <div className="bg-slate-900 text-white p-3.5 rounded-2xl flex items-center justify-between shadow-sm">
-                  <span className="font-black text-xs uppercase tracking-widest text-indigo-400">Quarter Finals</span>
-                  <span className="text-[10px] bg-indigo-950 px-2 py-0.5 rounded font-bold font-mono">{quarters.length} Matches</span>
-                </div>
-
-                <div className="space-y-3.5">
-                  {quarters.length === 0 ? (
-                    <div className="p-6 border-2 border-dashed border-slate-200 rounded-2xl text-center text-[11px] text-slate-400 font-bold bg-slate-50/40">
-                      QF Bracket Pending Seeding
-                    </div>
-                  ) : (
-                    quarters.map((f, idx) => renderBracketMatchCard(f, idx, 'QF'))
-                  )}
                 </div>
               </div>
+            ) : null}
+          </motion.div>
+        )}
 
-              {/* STAGE B: SEMI FINALS */}
-              <div className="space-y-4 w-[280px] md:w-auto shrink-0">
-                <div className="bg-slate-900 text-white p-3.5 rounded-2xl flex items-center justify-between shadow-sm">
-                  <span className="font-black text-xs uppercase tracking-widest text-emerald-400">Semi Finals</span>
-                  <span className="text-[10px] bg-emerald-950 px-2 py-0.5 rounded font-bold font-mono">{semis.length} Matches</span>
-                </div>
-
-                <div className="space-y-3.5">
-                  {semis.length === 0 ? (
-                    <div className="p-6 border-2 border-dashed border-slate-200 rounded-2xl text-center text-[11px] text-slate-400 font-bold bg-slate-50/40">
-                      SF Bracket Pending Seeding
-                    </div>
-                  ) : (
-                    semis.map((f, idx) => renderBracketMatchCard(f, idx, 'SF'))
-                  )}
-                </div>
+        {/* 4. PLAYER LEADERBOARDS TAB */}
+        {activeTab === 'leaderboards' && (
+          <motion.div
+            key="leaderboards"
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -15 }}
+            className="space-y-6"
+          >
+            {/* Control Panel: Search & Select Metric */}
+            <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex flex-col md:flex-row gap-4 justify-between items-center">
+              <div className="relative w-full md:w-80">
+                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search player name..."
+                  value={leaderboardSearch}
+                  onChange={(e) => setLeaderboardSearch(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2.5 text-xs font-bold rounded-2xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition"
+                />
               </div>
 
-              {/* STAGE C: GRAND FINAL */}
-              <div className="space-y-4 w-[280px] md:w-auto shrink-0">
-                <div className="bg-slate-900 text-white p-3.5 rounded-2xl flex items-center justify-between shadow-sm">
-                  <span className="font-black text-xs uppercase tracking-widest text-amber-400">Grand Final</span>
-                  <span className="text-[10px] bg-amber-950 px-2 py-0.5 rounded font-bold font-mono">{finals.length} Match</span>
-                </div>
-
-                <div className="space-y-3.5">
-                  {finals.length === 0 ? (
-                    <div className="p-6 border-2 border-dashed border-slate-200 rounded-2xl text-center text-[11px] text-slate-400 font-bold bg-slate-50/40">
-                      Final Pending Promotion
-                    </div>
-                  ) : (
-                    finals.map((f, idx) => renderBracketMatchCard(f, idx, 'FINAL', true))
-                  )}
-                </div>
-              </div>
-
+              {/* Metric Selectors */}
+              <div className="flex flex-wrap gap-2 w-full md:w-auto justify-end">
+                <button
+                  onClick={() => setLeaderboardSort('pointsScored')}
+                  className={`px-3.5 py-2 text-xs font-extrabold rounded-xl transition flex items-center gap-1.5 ${
+                    leaderboardSort === 'pointsScored' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  🎯 Top Scorers
+                </button>
+                <button
+                  onClick={() => setLeaderboardSort('longestStreak')}
+                  className={`px-3.5 py-2 text-xs font-extrabold rounded-xl transition flex items-center gap-1.5 ${
+                    leaderboardSort === 'longestStreak' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  🔥 Win Streak
+                </button>
+                <button
+                  onClick={() => setLeaderboardSort('pointDiff')}
+                  className={`px-3.5 py-2 text-xs font-extrabold rounded-xl transition flex items-center gap-1.5 ${
+                    leaderboardSort === 'pointDiff' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  ⚖️ Point Diff
+                </button>
+                <button
+                  onClick={() => setLeaderboardSort('winRate')}
+                  className={`px-3.5 py-2 text-xs font-extrabold rounded-xl transition flex items-center gap-1.5 ${
+                    leaderboardSort === 'winRate' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  📈 Win Rate %
+                </button>
               </div>
             </div>
+
+            {filteredLeaderboard.length === 0 ? (
+              <div className="bg-white border border-slate-100 p-10 rounded-3xl text-center shadow-sm">
+                <HelpCircle className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                <h4 className="font-extrabold text-slate-800">No Leaders Found</h4>
+                <p className="text-slate-400 text-xs mt-1">
+                  {leaderboardSearch ? 'Try a different search query' : 'Complete group matches to compute individual performance metrics!'}
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                
+                {/* TOP 3 PODIUM */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-end">
+                  
+                  {/* 2nd Place (Silver) */}
+                  {filteredLeaderboard[1] && (
+                    <div className="bg-slate-50 border border-slate-150 p-5 rounded-3xl shadow-sm text-center relative overflow-hidden order-2 md:order-1 md:h-64 flex flex-col justify-center">
+                      <div className="absolute top-3 right-3 bg-slate-200 text-slate-700 font-extrabold text-[10px] px-2.5 py-1 rounded-full">
+                        RANK #2
+                      </div>
+                      <div className="w-11 h-11 bg-slate-200 rounded-full flex items-center justify-center mx-auto mb-3.5 shadow-sm">
+                        <Award className="w-6 h-6 text-slate-500" />
+                      </div>
+                      <h4 className="font-black text-slate-800 tracking-tight leading-snug">{filteredLeaderboard[1].name}</h4>
+                      <p className="text-[10px] font-extrabold text-slate-400 uppercase mt-0.5 tracking-wider">Silver Medalist</p>
+                      
+                      <div className="mt-4 inline-block bg-white border border-slate-100 rounded-2xl px-3.5 py-2 mx-auto">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                          {leaderboardSort === 'pointsScored' && 'Points Scored'}
+                          {leaderboardSort === 'longestStreak' && 'Winning Streak'}
+                          {leaderboardSort === 'pointDiff' && 'Point Differential'}
+                          {leaderboardSort === 'winRate' && 'Win Rate %'}
+                        </p>
+                        <p className="text-lg font-black text-slate-800 mt-0.5">
+                          {leaderboardSort === 'pointsScored' && `${filteredLeaderboard[1].pointsScored} pts`}
+                          {leaderboardSort === 'longestStreak' && `${filteredLeaderboard[1].longestStreak} wins`}
+                          {leaderboardSort === 'pointDiff' && (filteredLeaderboard[1].pointDiff > 0 ? `+${filteredLeaderboard[1].pointDiff}` : filteredLeaderboard[1].pointDiff)}
+                          {leaderboardSort === 'winRate' && `${filteredLeaderboard[1].winRate.toFixed(1)}%`}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 1st Place (Gold) */}
+                  {filteredLeaderboard[0] && (
+                    <div className="bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-amber-300/60 p-6 rounded-3xl shadow-md text-center relative overflow-hidden order-1 md:order-2 md:h-72 flex flex-col justify-center ring-4 ring-amber-300/10">
+                      <div className="absolute top-3 right-3 bg-amber-400 text-amber-950 font-black text-[10px] px-3 py-1 rounded-full shadow-sm">
+                        CHAMPION #1
+                      </div>
+                      <div className="w-14 h-14 bg-amber-100 border border-amber-300/40 rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm animate-bounce">
+                        <Trophy className="w-8 h-8 text-amber-600" />
+                      </div>
+                      <h4 className="font-black text-slate-900 text-lg tracking-tight leading-snug">{filteredLeaderboard[0].name}</h4>
+                      <p className="text-[10px] font-black text-amber-600 uppercase mt-0.5 tracking-wider">Tournament Gold</p>
+                      
+                      <div className="mt-5 inline-block bg-white border border-amber-100 rounded-2xl px-4 py-2.5 mx-auto shadow-sm">
+                        <p className="text-[10px] font-black text-amber-600 uppercase tracking-widest">
+                          {leaderboardSort === 'pointsScored' && 'Points Scored'}
+                          {leaderboardSort === 'longestStreak' && 'Winning Streak'}
+                          {leaderboardSort === 'pointDiff' && 'Point Differential'}
+                          {leaderboardSort === 'winRate' && 'Win Rate %'}
+                        </p>
+                        <p className="text-xl font-black text-slate-900 mt-0.5">
+                          {leaderboardSort === 'pointsScored' && `${filteredLeaderboard[0].pointsScored} pts`}
+                          {leaderboardSort === 'longestStreak' && `${filteredLeaderboard[0].longestStreak} wins`}
+                          {leaderboardSort === 'pointDiff' && (filteredLeaderboard[0].pointDiff > 0 ? `+${filteredLeaderboard[0].pointDiff}` : filteredLeaderboard[0].pointDiff)}
+                          {leaderboardSort === 'winRate' && `${filteredLeaderboard[0].winRate.toFixed(1)}%`}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 3rd Place (Bronze) */}
+                  {filteredLeaderboard[2] && (
+                    <div className="bg-slate-50 border border-slate-150 p-5 rounded-3xl shadow-sm text-center relative overflow-hidden order-3 md:h-64 flex flex-col justify-center">
+                      <div className="absolute top-3 right-3 bg-amber-100 text-amber-800 font-extrabold text-[10px] px-2.5 py-1 rounded-full">
+                        RANK #3
+                      </div>
+                      <div className="w-11 h-11 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-3.5 shadow-sm">
+                        <Award className="w-6 h-6 text-amber-700" />
+                      </div>
+                      <h4 className="font-black text-slate-800 tracking-tight leading-snug">{filteredLeaderboard[2].name}</h4>
+                      <p className="text-[10px] font-extrabold text-amber-700/80 uppercase mt-0.5 tracking-wider">Bronze Medalist</p>
+                      
+                      <div className="mt-4 inline-block bg-white border border-slate-100 rounded-2xl px-3.5 py-2 mx-auto">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                          {leaderboardSort === 'pointsScored' && 'Points Scored'}
+                          {leaderboardSort === 'longestStreak' && 'Winning Streak'}
+                          {leaderboardSort === 'pointDiff' && 'Point Differential'}
+                          {leaderboardSort === 'winRate' && 'Win Rate %'}
+                        </p>
+                        <p className="text-lg font-black text-slate-800 mt-0.5">
+                          {leaderboardSort === 'pointsScored' && `${filteredLeaderboard[2].pointsScored} pts`}
+                          {leaderboardSort === 'longestStreak' && `${filteredLeaderboard[2].longestStreak} wins`}
+                          {leaderboardSort === 'pointDiff' && (filteredLeaderboard[2].pointDiff > 0 ? `+${filteredLeaderboard[2].pointDiff}` : filteredLeaderboard[2].pointDiff)}
+                          {leaderboardSort === 'winRate' && `${filteredLeaderboard[2].winRate.toFixed(1)}%`}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                </div>
+
+                {/* OTHER PLAYERS DETAILS TABLE */}
+                <div className="bg-white border border-slate-100 rounded-3xl overflow-hidden shadow-sm">
+                  <div className="p-4 bg-slate-50 border-b border-slate-100">
+                    <h4 className="font-extrabold text-xs uppercase tracking-wider text-slate-600">Leaderboard Rankings</h4>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="border-b border-slate-100 text-slate-400 font-extrabold bg-slate-50/50 uppercase text-[10px]">
+                          <th className="p-3.5 text-center w-12">Rank</th>
+                          <th className="p-3.5">Player Name</th>
+                          <th className="p-3.5 text-center">Matches</th>
+                          <th className="p-3.5 text-center">Wins</th>
+                          <th className="p-3.5 text-center">Losses</th>
+                          <th className="p-3.5 text-center">Points Scored</th>
+                          <th className="p-3.5 text-center">Points Against</th>
+                          <th className="p-3.5 text-center">Point Diff</th>
+                          <th className="p-3.5 text-center">Win Rate</th>
+                          <th className="p-3.5 text-center">Longest Streak</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredLeaderboard.map((p, idx) => {
+                          const isTopThree = idx < 3;
+                          return (
+                            <tr 
+                              key={p.id}
+                              className={`border-b border-slate-50 hover:bg-slate-50/50 transition font-bold text-slate-700 ${
+                                isTopThree ? 'bg-indigo-50/10' : ''
+                              }`}
+                            >
+                              <td className="p-3.5 text-center">
+                                <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full font-black text-[11px] ${
+                                  idx === 0 ? 'bg-amber-100 text-amber-800' :
+                                  idx === 1 ? 'bg-slate-100 text-slate-800' :
+                                  idx === 2 ? 'bg-orange-100 text-orange-800' :
+                                  'text-slate-400'
+                                }`}>
+                                  {idx + 1}
+                                </span>
+                              </td>
+                              <td className="p-3.5">
+                                <div className="font-black text-slate-800">{p.name}</div>
+                              </td>
+                              <td className="p-3.5 text-center font-mono text-slate-600">{p.matchesPlayed}</td>
+                              <td className="p-3.5 text-center text-emerald-600 font-mono">{p.wins}</td>
+                              <td className="p-3.5 text-center text-rose-500 font-mono">{p.losses}</td>
+                              <td className="p-3.5 text-center font-mono text-slate-600">{p.pointsScored}</td>
+                              <td className="p-3.5 text-center font-mono text-slate-600">{p.pointsAgainst}</td>
+                              <td className={`p-3.5 text-center font-mono ${p.pointDiff >= 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
+                                {p.pointDiff > 0 ? `+${p.pointDiff}` : p.pointDiff}
+                              </td>
+                              <td className="p-3.5 text-center text-indigo-600 font-mono">{p.winRate.toFixed(1)}%</td>
+                              <td className="p-3.5 text-center font-mono text-amber-600">
+                                <span className="inline-flex items-center gap-0.5">
+                                  <Flame className="w-3.5 h-3.5 text-orange-500 fill-orange-500" />
+                                  {p.longestStreak}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+              </div>
+            )}
           </motion.div>
         )}
 

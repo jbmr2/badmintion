@@ -228,7 +228,10 @@ export default function RefereePanel({ tournamentId, userRole = 'user' }: Refere
 
   // Adjust team points in standings
   const adjustTeamPoints = async (winnerPlayerId: string, delta: number, fixture?: any) => {
-    if (fixture?.groupName?.toLowerCase().includes('family')) {
+    if (
+      fixture?.groupName?.toLowerCase().includes('family') ||
+      fixture?.groupName?.toLowerCase().includes('kids')
+    ) {
       return;
     }
     try {
@@ -236,7 +239,10 @@ export default function RefereePanel({ tournamentId, userRole = 'user' }: Refere
       const teamDoc = teamsSnapshot.docs.find(doc => doc.data().playerIds?.includes(winnerPlayerId));
       if (teamDoc) {
         const teamData = teamDoc.data();
-        if (teamData?.name?.toLowerCase().includes('family')) {
+        if (
+          teamData?.name?.toLowerCase().includes('family') ||
+          teamData?.name?.toLowerCase().includes('kids')
+        ) {
           return;
         }
         await updateDoc(teamDoc.ref, { points: increment(delta) });
@@ -249,6 +255,10 @@ export default function RefereePanel({ tournamentId, userRole = 'user' }: Refere
   // Live scoring increment/decrement
   const handleScoreChange = async (field: string, delta: number) => {
     if (!activeFixture) return;
+    if (!activeFixture.court) {
+      alert("Assigning a court is mandatory before you can enter scores.");
+      return;
+    }
     const currentScores = activeFixture.scores || { p1g1: 0, p2g1: 0, p1g2: 0, p2g2: 0, p1g3: 0, p2g3: 0 };
     
     // Prevent increasing score if current set is already finished
@@ -327,6 +337,10 @@ export default function RefereePanel({ tournamentId, userRole = 'user' }: Refere
   // Complete and save match results
   const completeMatch = async () => {
     if (!activeFixture) return;
+    if (!activeFixture.court) {
+      alert("Assigning a court is mandatory before you can enter scores.");
+      return;
+    }
     const s = activeFixture.scores || { p1g1: 0, p2g1: 0, p1g2: 0, p2g2: 0, p1g3: 0, p2g3: 0 };
     
     // Validate if enough sets are finished to determine a winner
@@ -708,9 +722,13 @@ export default function RefereePanel({ tournamentId, userRole = 'user' }: Refere
                     className="text-xs font-bold bg-slate-100 border border-slate-200 rounded-lg p-1.5 focus:outline-hidden disabled:opacity-75"
                   >
                     <option value="">No Court Assigned</option>
-                    {courts.map(court => (
-                      <option key={court} value={court}>{court}</option>
-                    ))}
+                    {courts.map(court => {
+                      const isOtherLive = fixtures.some(x => x.status === 'live' && x.court === court && x.id !== activeFixture?.id);
+                      if (court === 'Court 1' && isOtherLive) return null;
+                      return (
+                        <option key={court} value={court}>{court}</option>
+                      );
+                    })}
                   </select>
                 </div>
 
