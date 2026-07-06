@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Trophy, Calendar, Medal, MapPin, ExternalLink, Activity, Sparkles, ArrowLeft, Info, HelpCircle } from 'lucide-react';
+import { Trophy, Calendar, Medal, MapPin, ExternalLink, Activity, Sparkles, ArrowLeft, Info, HelpCircle, Clock } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import PointsTable from './PointsTable';
 import FixtureManager from './FixtureManager';
@@ -11,6 +11,7 @@ interface Tournament {
   venue?: string;
   startDate?: string;
   endDate?: string;
+  startTime?: string;
   tournamentType?: string;
 }
 
@@ -119,6 +120,11 @@ export default function PublicTournamentPortal({
                 {tournament.startDate && (
                   <span className="flex items-center gap-1">
                     <Calendar className="w-3.5 h-3.5 text-slate-400" /> {tournament.startDate} to {tournament.endDate}
+                  </span>
+                )}
+                {tournament.startTime && (
+                  <span className="flex items-center gap-1">
+                    <Clock className="w-3.5 h-3.5 text-slate-400" /> {tournament.startTime}
                   </span>
                 )}
               </p>

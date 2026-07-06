@@ -77,6 +77,27 @@ export default function GroupManager({
   const [isBinding, setIsBinding] = useState(false);
   const [showPairBinder, setShowPairBinder] = useState(false);
 
+  // Hierarchy tracking states for L2 Data
+  const [roots, setRoots] = useState<any[]>([]);
+  const [allRootsLevel1, setAllRootsLevel1] = useState<any[]>([]);
+  const [allRootsLevel2, setAllRootsLevel2] = useState<any[]>([]);
+  const [allRootsPlayers, setAllRootsPlayers] = useState<any[]>([]);
+
+  // Helper to determine if a player is in a doubles/mixed category
+  const isDoublesOrMixedCategory = (playerId: string) => {
+    const assignment = allRootsPlayers.find(ap => ap.id === playerId);
+    if (!assignment) return false;
+    const root = assignment.rootName?.toLowerCase() || '';
+    const l1 = assignment.level1Name?.toLowerCase() || '';
+    const l2 = assignment.level2Name?.toLowerCase() || '';
+    
+    return (
+      root.includes('double') || root.includes('mix') ||
+      l1.includes('double') || l1.includes('mix') ||
+      l2.includes('double') || l2.includes('mix')
+    );
+  };
+
   const isAdmin = userRole === 'admin';
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -90,6 +111,86 @@ export default function GroupManager({
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  // Fetch roots, level1s, level2s, and players assignments for L2 Data
+  useEffect(() => {
+    if (!tournamentId) return;
+    const qRoots = query(collection(db, `tournaments/${tournamentId}/roots`));
+    const unsubscribeRoots = onSnapshot(qRoots, (snapshot) => {
+      setRoots(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, (e) => console.error("Error fetching roots in GroupManager:", e));
+    return () => unsubscribeRoots();
+  }, [tournamentId]);
+
+  useEffect(() => {
+    if (roots.length === 0 || !tournamentId) {
+      setAllRootsLevel1([]);
+      return;
+    }
+    const unsubscribes = roots.map(root => {
+      const q = query(collection(db, `tournaments/${tournamentId}/roots/${root.id}/level1`));
+      return onSnapshot(q, (snapshot) => {
+        setAllRootsLevel1(prev => {
+          const filtered = prev.filter(item => item.rootId !== root.id);
+          const newItems = snapshot.docs.map(doc => ({ id: doc.id, rootId: root.id, rootName: root.name, ...doc.data() }));
+          return [...filtered, ...newItems];
+        });
+      }, (err) => console.error("Error fetching level1s in GroupManager:", err));
+    });
+    return () => unsubscribes.forEach(unsub => unsub());
+  }, [roots, tournamentId]);
+
+  useEffect(() => {
+    if (allRootsLevel1.length === 0 || !tournamentId) {
+      setAllRootsLevel2([]);
+      return;
+    }
+    const unsubscribes = allRootsLevel1.map(l1 => {
+      const q = query(collection(db, `tournaments/${tournamentId}/roots/${l1.rootId}/level1/${l1.id}/level2`));
+      return onSnapshot(q, (snapshot) => {
+        setAllRootsLevel2(prev => {
+          const filtered = prev.filter(item => item.level1Id !== l1.id);
+          const newItems = snapshot.docs.map(doc => ({ 
+            id: doc.id, 
+            level1Id: l1.id, 
+            level1Name: l1.name,
+            rootId: l1.rootId, 
+            rootName: l1.rootName,
+            ...doc.data() 
+          }));
+          return [...filtered, ...newItems];
+        });
+      }, (err) => console.error("Error fetching level2s in GroupManager:", err));
+    });
+    return () => unsubscribes.forEach(unsub => unsub());
+  }, [allRootsLevel1, tournamentId]);
+
+  useEffect(() => {
+    if (allRootsLevel2.length === 0 || !tournamentId) {
+      setAllRootsPlayers([]);
+      return;
+    }
+    const unsubscribes = allRootsLevel2.map(l2 => {
+      const q = query(collection(db, `tournaments/${tournamentId}/roots/${l2.rootId}/level1/${l2.level1Id}/level2/${l2.id}/players`));
+      return onSnapshot(q, (snapshot) => {
+        setAllRootsPlayers(prev => {
+          const filtered = prev.filter(item => item.level2Id !== l2.id);
+          const newItems = snapshot.docs.map(doc => ({ 
+            id: doc.id, 
+            level2Id: l2.id, 
+            level2Name: l2.name,
+            level1Id: l2.level1Id, 
+            level1Name: l2.level1Name,
+            rootId: l2.rootId, 
+            rootName: l2.rootName,
+            ...doc.data() 
+          }));
+          return [...filtered, ...newItems];
+        });
+      }, (err) => console.error("Error fetching assigned players in GroupManager:", err));
+    });
+    return () => unsubscribes.forEach(unsub => unsub());
+  }, [allRootsLevel2, tournamentId]);
 
   useEffect(() => {
     const unsubPlayers = onSnapshot(collection(db, `tournaments/${tournamentId}/players`), (snapshot) => {
@@ -699,7 +800,7 @@ export default function GroupManager({
                 >
                   <option value="">-- Choose First Player --</option>
                   {players
-                    .filter(p => !p.pairId)
+                    .filter(p => !p.pairId && isDoublesOrMixedCategory(p.id))
                     .map(p => {
                       const groupName = playerAssignments[p.id];
                       return (
@@ -724,7 +825,7 @@ export default function GroupManager({
                 >
                   <option value="">-- Choose Second Player --</option>
                   {players
-                    .filter(p => !p.pairId && p.id !== binderP1Id)
+                    .filter(p => !p.pairId && p.id !== binderP1Id && isDoublesOrMixedCategory(p.id))
                     .map(p => {
                       const groupName = playerAssignments[p.id];
                       return (
@@ -1125,8 +1226,8 @@ export default function GroupManager({
                                 </p>
                                 
                                 {/* Inline Pairing & Unlinking controls */}
-                                {isAdmin && entry.type === 'single' && (() => {
-                                  const candidates = groupPlayers.filter(other => other.id !== entry.players[0].id && !other.pairId);
+                                {isAdmin && entry.type === 'single' && isDoublesOrMixedCategory(entry.players[0].id) && (() => {
+                                  const candidates = groupPlayers.filter(other => other.id !== entry.players[0].id && !other.pairId && isDoublesOrMixedCategory(other.id));
                                   if (candidates.length === 0) return null;
                                   return (
                                     <select

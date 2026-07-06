@@ -1050,7 +1050,46 @@ export default function HierarchyManager({
         }
       });
 
-      const isFamilyCategory = fixture.groupName?.toLowerCase().includes('family') || fixture.groupName?.toLowerCase().includes('kids');
+      let belongsToFamilyOrKids = false;
+      const allMatchPlayerIds = [...team1PlayerIds, ...team2PlayerIds];
+      for (const pId of allMatchPlayerIds) {
+        const p = assigned.find(item => item.id === pId);
+        if (p) {
+          const l2 = l2s.find(item => item.id === p.level2Id);
+          const l1 = l2 ? l1s.find(item => item.id === l2.level1Id) : null;
+          const root = l2 ? rts.find(item => item.id === l2.rootId) : null;
+
+          const rName = root?.name?.toLowerCase() || '';
+          const pName = l1?.name?.toLowerCase() || '';
+          const cName = l2?.name?.toLowerCase() || '';
+
+          if (
+            rName.includes('family') || rName.includes('kids') || rName.includes('kid') ||
+            pName.includes('family') || pName.includes('kids') || pName.includes('kid') ||
+            cName.includes('family') || cName.includes('kids') || cName.includes('kid')
+          ) {
+            belongsToFamilyOrKids = true;
+            break;
+          }
+        }
+      }
+
+      const tId = fixture.tournamentId || selectedTournamentId;
+      const tDoc = tournaments.find(x => x.id === tId);
+      const isTournamentFamilyOrKids = !!(
+        tDoc?.name?.toLowerCase().includes('family') ||
+        tDoc?.name?.toLowerCase().includes('kids') ||
+        tDoc?.name?.toLowerCase().includes('kid') ||
+        (tDoc?.categories && Array.isArray(tDoc.categories) && tDoc.categories.some((cat: string) => 
+          cat.toLowerCase().includes('family') || cat.toLowerCase().includes('kids') || cat.toLowerCase().includes('kid')
+        ))
+      );
+
+      const isFamilyCategory = 
+        fixture.groupName?.toLowerCase().includes('family') || 
+        fixture.groupName?.toLowerCase().includes('kids') || 
+        belongsToFamilyOrKids ||
+        isTournamentFamilyOrKids;
 
       // Update P1
       team1PlayerIds.forEach(pId => {
@@ -1441,7 +1480,47 @@ export default function HierarchyManager({
       }
 
       const s = match.scores || {};
-      const isFamilyCategory = fixture.groupName?.toLowerCase().includes('family') || fixture.groupName?.toLowerCase().includes('kids');
+
+      let belongsToFamilyOrKids = false;
+      const allMatchPlayerIds = [...team1PlayerIds, ...team2PlayerIds];
+      for (const pId of allMatchPlayerIds) {
+        const p = activeAssigned.find(item => item.id === pId);
+        if (p) {
+          const l2 = activeL2.find(item => item.id === p.level2Id);
+          const l1 = l2 ? activeL1.find(item => item.id === l2.level1Id) : null;
+          const root = l2 ? activeRoots.find(item => item.id === l2.rootId) : null;
+
+          const rName = root?.name?.toLowerCase() || '';
+          const pName = l1?.name?.toLowerCase() || '';
+          const cName = l2?.name?.toLowerCase() || '';
+
+          if (
+            rName.includes('family') || rName.includes('kids') || rName.includes('kid') ||
+            pName.includes('family') || pName.includes('kids') || pName.includes('kid') ||
+            cName.includes('family') || cName.includes('kids') || cName.includes('kid')
+          ) {
+            belongsToFamilyOrKids = true;
+            break;
+          }
+        }
+      }
+
+      const tId = fixture.tournamentId || selectedTournamentId;
+      const tDoc = tournaments.find(x => x.id === tId);
+      const isTournamentFamilyOrKids = !!(
+        tDoc?.name?.toLowerCase().includes('family') ||
+        tDoc?.name?.toLowerCase().includes('kids') ||
+        tDoc?.name?.toLowerCase().includes('kid') ||
+        (tDoc?.categories && Array.isArray(tDoc.categories) && tDoc.categories.some((cat: string) => 
+          cat.toLowerCase().includes('family') || cat.toLowerCase().includes('kids') || cat.toLowerCase().includes('kid')
+        ))
+      );
+
+      const isFamilyCategory = 
+        fixture.groupName?.toLowerCase().includes('family') || 
+        fixture.groupName?.toLowerCase().includes('kids') || 
+        belongsToFamilyOrKids ||
+        isTournamentFamilyOrKids;
 
       // Get match win points based on stage
       const t = fixture.matchType?.toLowerCase() || 'league';

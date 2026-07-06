@@ -50,6 +50,7 @@ export default function TournamentSetup({
     venue: 'Indoor Stadium',
     startDate: '2026-07-10',
     endDate: '2026-07-12',
+    startTime: '',
     logo: '',
     tournamentType: 'League',
     matchFormat: 'Best of 3',
@@ -116,6 +117,7 @@ export default function TournamentSetup({
             venue: data.venue || '',
             startDate: data.startDate || '',
             endDate: data.endDate || '',
+            startTime: data.startTime || '',
             logo: data.logo || '',
             tournamentType: data.tournamentType || 'League',
             matchFormat: data.matchFormat || 'Best of 3',
@@ -329,6 +331,15 @@ export default function TournamentSetup({
         <FormField label="Start Date" required><input type="date" value={formData.startDate} onChange={(e) => setFormData({ ...formData, startDate: e.target.value })} className="w-full p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none" /></FormField>
         <FormField label="End Date" required><input type="date" value={formData.endDate} onChange={(e) => setFormData({ ...formData, endDate: e.target.value })} className="w-full p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none" /></FormField>
       </div>
+      <FormField label="Start Time (e.g. 12 PM to 3 PM)">
+        <input 
+          type="text" 
+          value={formData.startTime} 
+          onChange={(e) => setFormData({ ...formData, startTime: e.target.value })} 
+          placeholder="e.g. 12 PM to 3 PM or 12:00 PM - 03:00 PM" 
+          className="w-full p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none" 
+        />
+      </FormField>
       <FormField label="Logo URL (Optional)"><input type="text" value={formData.logo} onChange={(e) => setFormData({ ...formData, logo: e.target.value })} className="w-full p-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none" /></FormField>
       
       {/* CATEGORIES OPTION SECTION */}

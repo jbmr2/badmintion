@@ -89,7 +89,7 @@ export default function TournamentList({
                 </span>
                 <h3 className="text-lg font-bold text-slate-900 group-hover:text-indigo-600 transition mt-2">{t.name}</h3>
                 <p className="text-xs text-slate-500 font-medium">
-                  📍 {t.venue || 'No Venue'} | 📅 {t.startDate || 'No Date'} to {t.endDate || 'No Date'}
+                  📍 {t.venue || 'No Venue'} | 📅 {t.startDate || 'No Date'} to {t.endDate || 'No Date'}{t.startTime ? ` | 🕒 ${t.startTime}` : ''}
                 </p>
                 {t.categories && Array.isArray(t.categories) && t.categories.length > 0 && (
                   <p className="text-[11px] text-slate-400 font-bold mt-1">

@@ -724,7 +724,7 @@ export default function RefereePanel({ tournamentId, userRole = 'user' }: Refere
                     <option value="">No Court Assigned</option>
                     {courts.map(court => {
                       const isOtherLive = fixtures.some(x => x.status === 'live' && x.court === court && x.id !== activeFixture?.id);
-                      if (court === 'Court 1' && isOtherLive) return null;
+                      if (isOtherLive) return null;
                       return (
                         <option key={court} value={court}>{court}</option>
                       );

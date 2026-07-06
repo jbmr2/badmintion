@@ -897,7 +897,7 @@ export default function MatchScoreManager({
                           <option value="">No Court</option>
                           {courts.map(courtOpt => {
                             const isOtherLive = fixtures.some(x => x.status === 'live' && x.court === courtOpt && x.id !== f.id);
-                            if (courtOpt === 'Court 1' && isOtherLive) return null;
+                            if (isOtherLive) return null;
                             return (
                               <option key={courtOpt} value={courtOpt}>{courtOpt}</option>
                             );
@@ -1050,7 +1050,7 @@ export default function MatchScoreManager({
                 {courts.map(courtOpt => {
                   const isSelected = activeFixture?.court === courtOpt;
                   const isOtherLive = fixtures.some(f => f.status === 'live' && f.court === courtOpt && f.id !== activeFixture?.id);
-                  if (courtOpt === 'Court 1' && isOtherLive) return null;
+                  if (isOtherLive) return null;
                   return (
                     <button
                       key={courtOpt}

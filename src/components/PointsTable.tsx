@@ -398,7 +398,43 @@ export default function PointsTable({
       groupedStats[groupName][p2].pointsAgainst += (s.p1g1 || 0) + (s.p1g2 || 0) + (s.p1g3 || 0);
 
       // Award female player bonus points (+5 points flat for 1st match played)
-      const isFamilyCategory = fixture.groupName?.toLowerCase().includes('family') || fixture.groupName?.toLowerCase().includes('kids');
+      const playerRootMap = Object.fromEntries(allRootsPlayers.map(ap => [ap.id, ap.rootName || '']));
+      const team1Player1 = isDoublesMatch ? fixture.player1aId : fixture.player1Id;
+      const team1Player2 = isDoublesMatch ? fixture.player1bId : null;
+      const team2Player1 = isDoublesMatch ? fixture.player2aId : fixture.player2Id;
+      const team2Player2 = isDoublesMatch ? fixture.player2bId : null;
+      const allPlayersInMatch = [team1Player1, team1Player2, team2Player1, team2Player2].filter(Boolean);
+
+      let belongsToFamilyOrKids = false;
+      for (const pId of allPlayersInMatch) {
+        if (!pId) continue;
+        const rName = (playerRootMap[pId] || '').toLowerCase();
+        const l1Name = (playerL1Map[pId] || '').toLowerCase();
+        const l2Name = (playerL2Map[pId] || '').toLowerCase();
+        if (
+          rName.includes('family') || rName.includes('kids') || rName.includes('kid') ||
+          l1Name.includes('family') || l1Name.includes('kids') || l1Name.includes('kid') ||
+          l2Name.includes('family') || l2Name.includes('kids') || l2Name.includes('kid')
+        ) {
+          belongsToFamilyOrKids = true;
+          break;
+        }
+      }
+
+      const isTournamentFamilyOrKids = !!(
+        tournament?.name?.toLowerCase().includes('family') ||
+        tournament?.name?.toLowerCase().includes('kids') ||
+        tournament?.name?.toLowerCase().includes('kid') ||
+        (tournament?.categories && Array.isArray(tournament.categories) && tournament.categories.some((cat: string) => 
+          cat.toLowerCase().includes('family') || cat.toLowerCase().includes('kids') || cat.toLowerCase().includes('kid')
+        ))
+      );
+
+      const isFamilyCategory = 
+        fixture.groupName?.toLowerCase().includes('family') || 
+        fixture.groupName?.toLowerCase().includes('kids') || 
+        belongsToFamilyOrKids ||
+        isTournamentFamilyOrKids;
       if (!isFamilyCategory) {
         // Team 1
         const t1Player1 = isDoublesMatch ? fixture.player1aId : fixture.player1Id;
@@ -450,11 +486,39 @@ export default function PointsTable({
       const played = stats.wins + stats.losses;
       let matchPoints = (stats.wins * winPointsValue) + (stats.losses * lossPointsValue);
       
-      const isFamilyGroup = groupName.toLowerCase().includes('family') || groupName.toLowerCase().includes('kids');
-      if (!isFamilyGroup) {
-        matchPoints += stats.femaleBonusPoints || 0;
-      } else {
+      const playerRootMapForRankings = Object.fromEntries(allRootsPlayers.map(ap => [ap.id, ap.rootName || '']));
+      const checkPlayerFamilyOrKids = (id: string) => {
+        if (!id) return false;
+        const rName = (playerRootMapForRankings[id] || '').toLowerCase();
+        const l1Name = (playerL1Map[id] || '').toLowerCase();
+        const l2Name = (playerL2Map[id] || '').toLowerCase();
+        return (
+          rName.includes('family') || rName.includes('kids') || rName.includes('kid') ||
+          l1Name.includes('family') || l1Name.includes('kids') || l1Name.includes('kid') ||
+          l2Name.includes('family') || l2Name.includes('kids') || l2Name.includes('kid')
+        );
+      };
+
+      const isTournamentFamilyOrKids = !!(
+        tournament?.name?.toLowerCase().includes('family') ||
+        tournament?.name?.toLowerCase().includes('kids') ||
+        tournament?.name?.toLowerCase().includes('kid') ||
+        (tournament?.categories && Array.isArray(tournament.categories) && tournament.categories.some((cat: string) => 
+          cat.toLowerCase().includes('family') || cat.toLowerCase().includes('kids') || cat.toLowerCase().includes('kid')
+        ))
+      );
+
+      const belongsToFamilyOrKidsGroup = checkPlayerFamilyOrKids(stats.playerId) || (stats.partnerId && checkPlayerFamilyOrKids(stats.partnerId));
+      const isFamilyGroup = 
+        groupName.toLowerCase().includes('family') || 
+        groupName.toLowerCase().includes('kids') || 
+        belongsToFamilyOrKidsGroup ||
+        isTournamentFamilyOrKids;
+      
+      if (isFamilyGroup) {
         matchPoints = 0;
+      } else {
+        matchPoints += stats.femaleBonusPoints || 0;
       }
 
       const gameDiff = stats.gamesWon - stats.gamesLost;
