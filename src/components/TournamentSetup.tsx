@@ -37,38 +37,72 @@ export default function TournamentSetup({
   onNext, 
   editingId = null, 
   onCancel,
-  userRole = 'user'
+  userRole = 'user',
+  selectedGame = 'badminton'
 }: { 
   onNext: (tournamentId: string) => void, 
   editingId?: string | null, 
   onCancel?: () => void,
-  userRole?: 'admin' | 'scorer' | 'user'
+  userRole?: 'admin' | 'scorer' | 'user',
+  selectedGame?: 'badminton' | 'pickleball' | 'table_tennis'
 }) {
+  const getGameTitle = (game: string) => {
+    if (game === 'table_tennis') return 'Table Tennis';
+    if (game === 'pickleball') return 'Pickleball';
+    return 'Badminton';
+  };
+
+  const gameName = getGameTitle(selectedGame);
+
   const [formData, setFormData] = useState({
-    name: 'Summer Badminton Championship 2026',
+    name: `Summer ${gameName} Championship 2026`,
     organizer: '',
-    venue: 'Indoor Stadium',
+    venue: 'Yamuna Sports Complex',
     startDate: '2026-07-10',
     endDate: '2026-07-12',
     startTime: '',
     logo: '',
     tournamentType: 'League',
     matchFormat: 'Best of 3',
-    gamePoints: 21,
+    gamePoints: selectedGame === 'badminton' ? 21 : 11,
     winByTwo: true,
-    maxPoint: 30,
+    maxPoint: selectedGame === 'badminton' ? 30 : 15,
     winPoints: 2,
     lossPoints: 0,
   });
 
-  const [selectedCategories, setSelectedCategories] = useState<string[]>([
-    "Member - Men's Singles (Open)", "Member - Women's Singles (Open)"
-  ]);
+  const getPredefinedCategories = () => {
+    return PREDEFINED_CATEGORIES.map(cat => cat.replace('Badminton', gameName));
+  };
+
+  const predefinedList = getPredefinedCategories();
+
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [customCategory, setCustomCategory] = useState('');
 
   const [selectedCourts, setSelectedCourts] = useState<string[]>([
     "Court 1", "Court 2", "Court 3", "Court 4"
   ]);
+
+  useEffect(() => {
+    if (!editingId) {
+      const defaultName = `Summer ${gameName} Championship 2026`;
+      const points = selectedGame === 'badminton' ? 21 : 11;
+      const maxPt = selectedGame === 'badminton' ? 30 : 15;
+      
+      setFormData(prev => ({
+        ...prev,
+        name: defaultName,
+        gamePoints: points,
+        maxPoint: maxPt
+      }));
+
+      setSelectedCategories([
+        `${gameName} - Solo - Mens Single - Open Category`,
+        `${gameName} - Solo - Womens Single - Open Category`
+      ]);
+    }
+  }, [editingId, selectedGame]);
   const [customCourt, setCustomCourt] = useState('');
   const [loading, setLoading] = useState(false);
   const [customId, setCustomId] = useState('');
@@ -179,7 +213,8 @@ export default function TournamentSetup({
       const dataToSave = {
         ...formData,
         categories: selectedCategories,
-        courts: selectedCourts
+        courts: selectedCourts,
+        sport: selectedGame
       };
 
       if (editingId) {
@@ -346,7 +381,7 @@ export default function TournamentSetup({
       <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-3">
         <label className="text-sm font-semibold text-slate-700 block">Select Tournament Categories</label>
         <div className="flex flex-wrap gap-2">
-          {PREDEFINED_CATEGORIES.map(cat => {
+          {predefinedList.map(cat => {
             const isSelected = selectedCategories.includes(cat);
             return (
               <button
@@ -363,7 +398,7 @@ export default function TournamentSetup({
               </button>
             );
           })}
-          {selectedCategories.filter(cat => !PREDEFINED_CATEGORIES.includes(cat)).map(cat => (
+          {selectedCategories.filter(cat => !predefinedList.includes(cat)).map(cat => (
             <button
               key={cat}
               type="button"

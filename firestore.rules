@@ -99,23 +99,16 @@ service cloud.firestore {
       }
 
       match /roots/{rootId} {
-        allow read: if true;
-        allow create, update: if isSignedIn() && exists(/databases/$(database)/documents/tournaments/$(tournamentId));
-        allow delete: if isSignedIn();
+        allow read, write: if true;
         
         match /level1/{level1Id} {
-          allow read: if true;
-          allow create, update: if isSignedIn();
-          allow delete: if isSignedIn();
+          allow read, write: if true;
           
           match /level2/{level2Id} {
-            allow read: if true;
-            allow create, update: if isSignedIn();
-            allow delete: if isSignedIn();
+            allow read, write: if true;
             
             match /players/{playerId} {
-              allow read: if true;
-              allow write: if isSignedIn();
+              allow read, write: if true;
             }
           }
         }

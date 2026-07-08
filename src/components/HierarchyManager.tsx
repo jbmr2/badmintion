@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { jsPDF } from 'jspdf';
 import { motion, AnimatePresence } from 'motion/react';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { 
@@ -104,13 +105,16 @@ export default function HierarchyManager({
   const [allLevel2, setAllLevel2] = useState<{[l1Id: string]: any[]}>({});
   const [allChapterPlayers, setAllChapterPlayers] = useState<{[l2Id: string]: any[]}>({});
 
-  // 1. Fetch Roots
+  const structureTournamentId = '_master_';
+
+  // 1. Fetch Roots from _master_
   useEffect(() => {
     if (selectedTournamentId) {
-      const qRoots = query(collection(db, `tournaments/${selectedTournamentId}/roots`));
-      return onSnapshot(qRoots, (snapshot) => {
-        setRoots(snapshot.docs.map(d => ({id: d.id, ...d.data()})));
-      }, (e) => handleFirestoreError(e, OperationType.LIST, `tournaments/${selectedTournamentId}/roots`));
+      const qRoots = query(collection(db, `tournaments/_master_/roots`));
+      const unsub = onSnapshot(qRoots, (snapshot) => {
+        setRoots(snapshot.docs.map(d => ({id: d.id, isMasterFallback: true, ...d.data()})));
+      }, (e) => handleFirestoreError(e, OperationType.LIST, `tournaments/_master_/roots`));
+      return () => unsub();
     } else {
       setRoots([]);
       setSelectedRootId(null);
@@ -119,30 +123,30 @@ export default function HierarchyManager({
 
   // 2. Fetch Level 1
   useEffect(() => {
-    if (selectedRootId && selectedTournamentId) {
-      const qLevel1 = query(collection(db, `tournaments/${selectedTournamentId}/roots/${selectedRootId}/level1`));
+    if (selectedRootId && structureTournamentId) {
+      const qLevel1 = query(collection(db, `tournaments/${structureTournamentId}/roots/${selectedRootId}/level1`));
       return onSnapshot(qLevel1, (snapshot) => {
         setLevel1(snapshot.docs.map(d => ({id: d.id, ...d.data()})));
-      }, (e) => handleFirestoreError(e, OperationType.LIST, `tournaments/${selectedTournamentId}/roots/${selectedRootId}/level1`));
+      }, (e) => handleFirestoreError(e, OperationType.LIST, `tournaments/${structureTournamentId}/roots/${selectedRootId}/level1`));
     } else {
       setLevel1([]);
       setSelectedLevel1Id(null);
       setSelectedLevel2Id(null);
     }
-  }, [selectedRootId, selectedTournamentId]);
+  }, [selectedRootId, structureTournamentId]);
 
   // 3. Fetch Level 2
   useEffect(() => {
-    if (selectedLevel1Id && selectedRootId && selectedTournamentId) {
-      const qLevel2 = query(collection(db, `tournaments/${selectedTournamentId}/roots/${selectedRootId}/level1/${selectedLevel1Id}/level2`));
+    if (selectedLevel1Id && selectedRootId && structureTournamentId) {
+      const qLevel2 = query(collection(db, `tournaments/${structureTournamentId}/roots/${selectedRootId}/level1/${selectedLevel1Id}/level2`));
       return onSnapshot(qLevel2, (snapshot) => {
         setLevel2(snapshot.docs.map(d => ({id: d.id, ...d.data()})));
-      }, (e) => handleFirestoreError(e, OperationType.LIST, `tournaments/${selectedTournamentId}/roots/${selectedRootId}/level1/${selectedLevel1Id}/level2`));
+      }, (e) => handleFirestoreError(e, OperationType.LIST, `tournaments/${structureTournamentId}/roots/${selectedRootId}/level1/${selectedLevel1Id}/level2`));
     } else {
       setLevel2([]);
       setSelectedLevel2Id(null);
     }
-  }, [selectedLevel1Id, selectedRootId, selectedTournamentId]);
+  }, [selectedLevel1Id, selectedRootId, structureTournamentId]);
 
   // 4. Fetch Tournaments
   useEffect(() => {
@@ -199,12 +203,12 @@ export default function HierarchyManager({
 
   // 7.1 Fetch ALL Level 1s across all Roots in the background
   useEffect(() => {
-    if (roots.length === 0 || !selectedTournamentId) {
+    if (roots.length === 0 || !structureTournamentId) {
       setAllRootsLevel1([]);
       return;
     }
     const unsubscribes = roots.map(root => {
-      const q = query(collection(db, `tournaments/${selectedTournamentId}/roots/${root.id}/level1`));
+      const q = query(collection(db, `tournaments/${structureTournamentId}/roots/${root.id}/level1`));
       return onSnapshot(q, (snapshot) => {
         setAllRootsLevel1(prev => {
           const filtered = prev.filter(item => item.rootId !== root.id);
@@ -214,16 +218,16 @@ export default function HierarchyManager({
       }, (err) => console.error(err));
     });
     return () => unsubscribes.forEach(unsub => unsub());
-  }, [roots, selectedTournamentId]);
+  }, [roots, structureTournamentId]);
 
   // 7.2 Fetch ALL Level 2s across all Level 1s
   useEffect(() => {
-    if (allRootsLevel1.length === 0 || !selectedTournamentId) {
+    if (allRootsLevel1.length === 0 || !structureTournamentId) {
       setAllRootsLevel2([]);
       return;
     }
     const unsubscribes = allRootsLevel1.map(l1 => {
-      const q = query(collection(db, `tournaments/${selectedTournamentId}/roots/${l1.rootId}/level1/${l1.id}/level2`));
+      const q = query(collection(db, `tournaments/${structureTournamentId}/roots/${l1.rootId}/level1/${l1.id}/level2`));
       return onSnapshot(q, (snapshot) => {
         setAllRootsLevel2(prev => {
           const filtered = prev.filter(item => item.level1Id !== l1.id);
@@ -233,7 +237,7 @@ export default function HierarchyManager({
       }, (err) => console.error(err));
     });
     return () => unsubscribes.forEach(unsub => unsub());
-  }, [allRootsLevel1, selectedTournamentId]);
+  }, [allRootsLevel1, structureTournamentId]);
 
   // 7.3 Fetch ALL assigned players across all Level 2s
   useEffect(() => {
@@ -278,81 +282,51 @@ export default function HierarchyManager({
     }
   }, [selectedTournamentId]);
 
-  // 7.6 Listen to ALL Roots across ALL tournaments in 'all' mode
+  // 7.6 Listen to ALL Roots across ALL tournaments in 'all' mode (Obsolete - using master roots)
   useEffect(() => {
-    if (selectedTournamentId !== 'all' || tournaments.length === 0) {
-      setAllTournamentsRoots([]);
-      return;
-    }
-    const unsubscribes = tournaments.map(t => {
-      const q = query(collection(db, `tournaments/${t.id}/roots`));
-      return onSnapshot(q, (snapshot) => {
-        setAllTournamentsRoots(prev => {
-          const filtered = prev.filter(item => item.tournamentId !== t.id);
-          const newItems = snapshot.docs.map(doc => ({ id: doc.id, tournamentId: t.id, ...doc.data() }));
-          return [...filtered, ...newItems];
-        });
-      }, (err) => console.error("Error fetching roots for tournament " + t.id, err));
-    });
-    return () => unsubscribes.forEach(unsub => unsub());
-  }, [tournaments, selectedTournamentId]);
+    setAllTournamentsRoots([]);
+  }, []);
 
-  // 7.7 Listen to ALL Level 1s across ALL roots across ALL tournaments in 'all' mode
+  // 7.7 Listen to ALL Level 1s across ALL roots across ALL tournaments in 'all' mode (Obsolete - using master level1)
   useEffect(() => {
-    if (selectedTournamentId !== 'all' || allTournamentsRoots.length === 0) {
-      setAllTournamentsLevel1([]);
-      return;
-    }
-    const unsubscribes = allTournamentsRoots.map(root => {
-      const q = query(collection(db, `tournaments/${root.tournamentId}/roots/${root.id}/level1`));
-      return onSnapshot(q, (snapshot) => {
-        setAllTournamentsLevel1(prev => {
-          const filtered = prev.filter(item => !(item.rootId === root.id && item.tournamentId === root.tournamentId));
-          const newItems = snapshot.docs.map(doc => ({ id: doc.id, rootId: root.id, tournamentId: root.tournamentId, ...doc.data() }));
-          return [...filtered, ...newItems];
-        });
-      }, (err) => console.error("Error fetching level1 for root " + root.id, err));
-    });
-    return () => unsubscribes.forEach(unsub => unsub());
-  }, [allTournamentsRoots, selectedTournamentId]);
+    setAllTournamentsLevel1([]);
+  }, []);
 
-  // 7.8 Listen to ALL Level 2s across ALL Level 1s in 'all' mode
+  // 7.8 Listen to ALL Level 2s across ALL Level 1s in 'all' mode (Obsolete - using master level2)
   useEffect(() => {
-    if (selectedTournamentId !== 'all' || allTournamentsLevel1.length === 0) {
-      setAllTournamentsLevel2([]);
-      return;
-    }
-    const unsubscribes = allTournamentsLevel1.map(l1 => {
-      const q = query(collection(db, `tournaments/${l1.tournamentId}/roots/${l1.rootId}/level1/${l1.id}/level2`));
-      return onSnapshot(q, (snapshot) => {
-        setAllTournamentsLevel2(prev => {
-          const filtered = prev.filter(item => !(item.level1Id === l1.id && item.tournamentId === l1.tournamentId));
-          const newItems = snapshot.docs.map(doc => ({ id: doc.id, level1Id: l1.id, rootId: l1.rootId, tournamentId: l1.tournamentId, ...doc.data() }));
-          return [...filtered, ...newItems];
-        });
-      }, (err) => console.error("Error fetching level2 for level1 " + l1.id, err));
-    });
-    return () => unsubscribes.forEach(unsub => unsub());
-  }, [allTournamentsLevel1, selectedTournamentId]);
+    setAllTournamentsLevel2([]);
+  }, []);
 
   // 7.9 Listen to ALL Assigned Players across ALL Level 2s in 'all' mode
   useEffect(() => {
-    if (selectedTournamentId !== 'all' || allTournamentsLevel2.length === 0) {
+    if (selectedTournamentId !== 'all' || allRootsLevel2.length === 0 || tournaments.length === 0) {
       setAllTournamentsAssignedPlayers([]);
       return;
     }
-    const unsubscribes = allTournamentsLevel2.map(l2 => {
-      const q = query(collection(db, `tournaments/${l2.tournamentId}/roots/${l2.rootId}/level1/${l2.level1Id}/level2/${l2.id}/players`));
-      return onSnapshot(q, (snapshot) => {
-        setAllTournamentsAssignedPlayers(prev => {
-          const filtered = prev.filter(item => !(item.level2Id === l2.id && item.tournamentId === l2.tournamentId));
-          const newItems = snapshot.docs.map(doc => ({ id: doc.id, level2Id: l2.id, level1Id: l2.level1Id, rootId: l2.rootId, tournamentId: l2.tournamentId, ...doc.data() }));
-          return [...filtered, ...newItems];
-        });
-      }, (err) => console.error("Error fetching players for level2 " + l2.id, err));
+    const unsubscribes: (() => void)[] = [];
+    tournaments.forEach(t => {
+      if (t.id === '_master_' || t.id === 'all') return;
+      allRootsLevel2.forEach(l2 => {
+        const q = query(collection(db, `tournaments/${t.id}/roots/${l2.rootId}/level1/${l2.level1Id}/level2/${l2.id}/players`));
+        const unsub = onSnapshot(q, (snapshot) => {
+          setAllTournamentsAssignedPlayers(prev => {
+            const filtered = prev.filter(item => !(item.level2Id === l2.id && item.tournamentId === t.id));
+            const newItems = snapshot.docs.map(doc => ({
+              id: doc.id,
+              level2Id: l2.id,
+              level1Id: l2.level1Id,
+              rootId: l2.rootId,
+              tournamentId: t.id,
+              ...doc.data()
+            }));
+            return [...filtered, ...newItems];
+          });
+        }, (err) => console.error(`Error fetching players for tournament ${t.id} level2 ${l2.id}:`, err));
+        unsubscribes.push(unsub);
+      });
     });
     return () => unsubscribes.forEach(unsub => unsub());
-  }, [allTournamentsLevel2, selectedTournamentId]);
+  }, [allRootsLevel2, tournaments, selectedTournamentId]);
 
   // 7.10 Listen to ALL Matches across ALL tournaments in 'all' mode
   useEffect(() => {
@@ -672,7 +646,7 @@ export default function HierarchyManager({
 
     try {
       // 1. Fetch all existing Roots under this tournament
-      const rootsCollectionRef = collection(db, `tournaments/${selectedTournamentId}/roots`);
+      const rootsCollectionRef = collection(db, `tournaments/${structureTournamentId}/roots`);
       const rootsSnap = await getDocs(rootsCollectionRef);
       const existingRootsMap: { [name: string]: string } = {};
       rootsSnap.docs.forEach(doc => {
@@ -707,7 +681,7 @@ export default function HierarchyManager({
         // Ensure Level 1 cache for this Root is loaded
         if (!existingL1Map[rootId]) {
           existingL1Map[rootId] = {};
-          const l1Snap = await getDocs(collection(db, `tournaments/${selectedTournamentId}/roots/${rootId}/level1`));
+          const l1Snap = await getDocs(collection(db, `tournaments/${structureTournamentId}/roots/${rootId}/level1`));
           l1Snap.docs.forEach(doc => {
             existingL1Map[rootId][doc.data().name.trim().toLowerCase()] = doc.id;
           });
@@ -720,7 +694,7 @@ export default function HierarchyManager({
         // Ensure Level 1 exists
         if (!l1Id) {
           setImportCsvProgress(`Adding Team L1: "${normalizedL1Name}" under "${normalizedRootName}"...`);
-          const l1Ref = await addDoc(collection(db, `tournaments/${selectedTournamentId}/roots/${rootId}/level1`), {
+          const l1Ref = await addDoc(collection(db, `tournaments/${structureTournamentId}/roots/${rootId}/level1`), {
             name: normalizedL1Name,
             rootId: rootId
           });
@@ -732,7 +706,7 @@ export default function HierarchyManager({
         // Ensure Level 2 cache for this Level 1 is loaded
         if (!existingL2Map[l1Id]) {
           existingL2Map[l1Id] = {};
-          const l2Snap = await getDocs(collection(db, `tournaments/${selectedTournamentId}/roots/${rootId}/level1/${l1Id}/level2`));
+          const l2Snap = await getDocs(collection(db, `tournaments/${structureTournamentId}/roots/${rootId}/level1/${l1Id}/level2`));
           l2Snap.docs.forEach(doc => {
             existingL2Map[l1Id][doc.data().name.trim().toLowerCase()] = doc.id;
           });
@@ -745,7 +719,7 @@ export default function HierarchyManager({
         // Ensure Level 2 exists
         if (!l2Id) {
           setImportCsvProgress(`Adding Chapter L2: "${normalizedL2Name}" under "${normalizedL1Name}"...`);
-          const l2Ref = await addDoc(collection(db, `tournaments/${selectedTournamentId}/roots/${rootId}/level1/${l1Id}/level2`), {
+          const l2Ref = await addDoc(collection(db, `tournaments/${structureTournamentId}/roots/${rootId}/level1/${l1Id}/level2`), {
             name: normalizedL2Name,
             level1Id: l1Id
           });
@@ -788,11 +762,11 @@ export default function HierarchyManager({
     if(newRootName.trim()) {
       setLoadingState('root');
       try {
-        await addDoc(collection(db, `tournaments/${selectedTournamentId}/roots`), { name: newRootName.trim() });
+        await addDoc(collection(db, `tournaments/${structureTournamentId}/roots`), { name: newRootName.trim() });
         setNewRootName('');
         setIsAddingRoot(false);
       } catch(e) {
-        handleFirestoreError(e, OperationType.CREATE, `tournaments/${selectedTournamentId}/roots`);
+        handleFirestoreError(e, OperationType.CREATE, `tournaments/${structureTournamentId}/roots`);
       } finally {
         setLoadingState('none');
       }
@@ -807,11 +781,11 @@ export default function HierarchyManager({
     if(newLevel1Name.trim() && selectedRootId) {
       setLoadingState('level1');
       try {
-        await addDoc(collection(db, `tournaments/${selectedTournamentId}/roots/${selectedRootId}/level1`), { name: newLevel1Name.trim(), rootId: selectedRootId });
+        await addDoc(collection(db, `tournaments/${structureTournamentId}/roots/${selectedRootId}/level1`), { name: newLevel1Name.trim(), rootId: selectedRootId });
         setNewLevel1Name('');
         setIsAddingLevel1(false);
       } catch(e) {
-        handleFirestoreError(e, OperationType.CREATE, `tournaments/${selectedTournamentId}/roots/${selectedRootId}/level1`);
+        handleFirestoreError(e, OperationType.CREATE, `tournaments/${structureTournamentId}/roots/${selectedRootId}/level1`);
       } finally {
         setLoadingState('none');
       }
@@ -826,11 +800,11 @@ export default function HierarchyManager({
     if(newLevel2Name.trim() && selectedRootId && selectedLevel1Id) {
       setLoadingState('level2');
       try {
-        await addDoc(collection(db, `tournaments/${selectedTournamentId}/roots/${selectedRootId}/level1/${selectedLevel1Id}/level2`), { name: newLevel2Name.trim(), level1Id: selectedLevel1Id });
+        await addDoc(collection(db, `tournaments/${structureTournamentId}/roots/${selectedRootId}/level1/${selectedLevel1Id}/level2`), { name: newLevel2Name.trim(), level1Id: selectedLevel1Id });
         setNewLevel2Name('');
         setIsAddingLevel2(false);
       } catch(e) {
-        handleFirestoreError(e, OperationType.CREATE, `tournaments/${selectedTournamentId}/roots/${selectedRootId}/level1/${selectedLevel1Id}/level2`);
+        handleFirestoreError(e, OperationType.CREATE, `tournaments/${structureTournamentId}/roots/${selectedRootId}/level1/${selectedLevel1Id}/level2`);
       } finally {
         setLoadingState('none');
       }
@@ -845,7 +819,7 @@ export default function HierarchyManager({
       return;
     }
     try {
-      await deleteDoc(doc(db, `tournaments/${selectedTournamentId}/roots`, id));
+      await deleteDoc(doc(db, `tournaments/${structureTournamentId}/roots`, id));
       if (selectedRootId === id) {
         setSelectedRootId(null);
         setSelectedLevel1Id(null);
@@ -853,7 +827,7 @@ export default function HierarchyManager({
       }
       setHierarchyToDelete(null);
     } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `tournaments/${selectedTournamentId}/roots`);
+      handleFirestoreError(err, OperationType.DELETE, `tournaments/${structureTournamentId}/roots`);
     }
   };
 
@@ -864,14 +838,14 @@ export default function HierarchyManager({
       return;
     }
     try {
-      await deleteDoc(doc(db, `tournaments/${selectedTournamentId}/roots/${selectedRootId}/level1`, id));
+      await deleteDoc(doc(db, `tournaments/${structureTournamentId}/roots/${selectedRootId}/level1`, id));
       if (selectedLevel1Id === id) {
         setSelectedLevel1Id(null);
         setSelectedLevel2Id(null);
       }
       setHierarchyToDelete(null);
     } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `tournaments/${selectedTournamentId}/roots/${selectedRootId}/level1`);
+      handleFirestoreError(err, OperationType.DELETE, `tournaments/${structureTournamentId}/roots/${selectedRootId}/level1`);
     }
   };
 
@@ -882,13 +856,13 @@ export default function HierarchyManager({
       return;
     }
     try {
-      await deleteDoc(doc(db, `tournaments/${selectedTournamentId}/roots/${selectedRootId}/level1/${selectedLevel1Id}/level2`, id));
+      await deleteDoc(doc(db, `tournaments/${structureTournamentId}/roots/${selectedRootId}/level1/${selectedLevel1Id}/level2`, id));
       if (selectedLevel2Id === id) {
         setSelectedLevel2Id(null);
       }
       setHierarchyToDelete(null);
     } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `tournaments/${selectedTournamentId}/roots/${selectedRootId}/level1/${selectedLevel1Id}/level2`);
+      handleFirestoreError(err, OperationType.DELETE, `tournaments/${structureTournamentId}/roots/${selectedRootId}/level1/${selectedLevel1Id}/level2`);
     }
   };
 
@@ -1153,9 +1127,9 @@ export default function HierarchyManager({
 
   const getHierarchyPointsData = () => {
     const isAllMode = selectedTournamentId === 'all';
-    const activeRoots = isAllMode ? allTournamentsRoots : roots;
-    const activeL1 = isAllMode ? allTournamentsLevel1 : allRootsLevel1;
-    const activeL2 = isAllMode ? allTournamentsLevel2 : allRootsLevel2;
+    const activeRoots = roots;
+    const activeL1 = allRootsLevel1;
+    const activeL2 = allRootsLevel2;
     const activeAssigned = isAllMode ? allTournamentsAssignedPlayers : allRootsPlayers;
     const activeTPlayers = isAllMode ? allTournamentsTournamentPlayers : tournamentPlayers;
     const activeMatches = isAllMode ? allTournamentsMatches : matches;
@@ -1194,10 +1168,10 @@ export default function HierarchyManager({
           rootKey: p.rootId || null
         };
       } else {
-        const l2 = activeL2.find(item => item.id === p.level2Id && item.tournamentId === p.tournamentId);
+        const l2 = activeL2.find(item => item.id === p.level2Id);
         if (!l2) return null;
-        const parent = activeL1.find(l1 => l1.id === l2.level1Id && l1.tournamentId === l2.tournamentId);
-        const root = activeRoots.find(r => r.id === l2.rootId && r.tournamentId === l2.tournamentId);
+        const parent = activeL1.find(l1 => l1.id === l2.level1Id);
+        const root = activeRoots.find(r => r.id === l2.rootId);
 
         const rName = (root ? root.name : 'Unknown').trim();
         const pName = (parent ? parent.name : 'Unknown').trim();
@@ -1258,8 +1232,8 @@ export default function HierarchyManager({
     } else {
       // All Tournaments Combined Logic
       activeL2.forEach(l2 => {
-        const parent = activeL1.find(l1 => l1.id === l2.level1Id && l1.tournamentId === l2.tournamentId);
-        const root = activeRoots.find(r => r.id === l2.rootId && r.tournamentId === l2.tournamentId);
+        const parent = activeL1.find(l1 => l1.id === l2.level1Id);
+        const root = activeRoots.find(r => r.id === l2.rootId);
         
         const rName = (root ? root.name : 'Unknown').trim();
         const pName = (parent ? parent.name : 'Unknown').trim();
@@ -1287,10 +1261,10 @@ export default function HierarchyManager({
 
       // Calculate playerCount for activeAssigned in allMode
       activeAssigned.forEach(p => {
-        const l2 = activeL2.find(item => item.id === p.level2Id && item.tournamentId === p.tournamentId);
+        const l2 = activeL2.find(item => item.id === p.level2Id);
         if (!l2) return;
-        const parent = activeL1.find(l1 => l1.id === l2.level1Id && l1.tournamentId === l2.tournamentId);
-        const root = activeRoots.find(r => r.id === l2.rootId && r.tournamentId === l2.tournamentId);
+        const parent = activeL1.find(l1 => l1.id === l2.level1Id);
+        const root = activeRoots.find(r => r.id === l2.rootId);
 
         const rName = (root ? root.name : 'Unknown').trim();
         const pName = (parent ? parent.name : 'Unknown').trim();
@@ -1347,7 +1321,7 @@ export default function HierarchyManager({
     } else {
       // All Tournaments Combined Logic
       activeL1.forEach(l1 => {
-        const root = activeRoots.find(r => r.id === l1.rootId && r.tournamentId === l1.tournamentId);
+        const root = activeRoots.find(r => r.id === l1.rootId);
         const rName = (root ? root.name : 'Unknown').trim();
         const pName = l1.name.trim();
         const key = `${rName}::${pName}`.toLowerCase();
@@ -1371,8 +1345,8 @@ export default function HierarchyManager({
 
       // Count chapterCount in isAllMode
       activeL2.forEach(l2 => {
-        const parent = activeL1.find(l1 => l1.id === l2.level1Id && l1.tournamentId === l2.tournamentId);
-        const root = activeRoots.find(r => r.id === l2.rootId && r.tournamentId === l2.tournamentId);
+        const parent = activeL1.find(l1 => l1.id === l2.level1Id);
+        const root = activeRoots.find(r => r.id === l2.rootId);
         if (!parent) return;
         const rName = (root ? root.name : 'Unknown').trim();
         const pName = parent.name.trim();
@@ -1444,7 +1418,7 @@ export default function HierarchyManager({
 
       // Count parentCount in isAllMode
       activeL1.forEach(l1 => {
-        const root = activeRoots.find(r => r.id === l1.rootId && r.tournamentId === l1.tournamentId);
+        const root = activeRoots.find(r => r.id === l1.rootId);
         if (!root) return;
         const rName = root.name.trim();
         const key = rName.toLowerCase();
@@ -1704,6 +1678,144 @@ export default function HierarchyManager({
     };
   };
 
+  const downloadHierarchyPDF = () => {
+    const doc = new jsPDF();
+    const data = getHierarchyPointsData();
+    const isAllMode = selectedTournamentId === 'all';
+    
+    // Header
+    doc.setFontSize(18);
+    doc.setFont("helvetica", "bold");
+    doc.text("Badminton Tournament Master Hierarchy Points Report", 14, 22);
+    
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Generated: ${new Date().toLocaleDateString()}`, 14, 28);
+    doc.text(`Tournament Context: ${isAllMode ? "All Tournaments" : (selectedTournamentId || "N/A")}`, 14, 34);
+    
+    doc.setDrawColor(200, 200, 200);
+    doc.line(14, 38, 196, 38);
+    
+    let y = 46;
+    
+    // Section 1: Roots Standings
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.text("1. Roots Standings", 14, y);
+    y += 6;
+    
+    doc.setFontSize(9);
+    doc.text("Rank", 14, y);
+    doc.text("Root Name", 25, y);
+    doc.text("Teams", 80, y);
+    doc.text("Wins", 100, y);
+    doc.text("Losses", 120, y);
+    doc.text("GD", 140, y);
+    doc.text("PD", 160, y);
+    doc.text("Points", 180, y);
+    
+    y += 3;
+    doc.line(14, y, 196, y);
+    y += 6;
+    
+    doc.setFont("helvetica", "normal");
+    data.roots.forEach((row: any, idx: number) => {
+      if (y > 270) {
+        doc.addPage();
+        y = 20;
+      }
+      doc.text(String(idx + 1), 14, y);
+      doc.text(row.name || "N/A", 25, y);
+      doc.text(String(row.parentCount || 0), 80, y);
+      doc.text(String(row.wins || 0), 100, y);
+      doc.text(String(row.losses || 0), 120, y);
+      doc.text(String(row.gamesWon - row.gamesLost), 140, y);
+      doc.text(String(row.pointsScored - row.pointsAgainst), 160, y);
+      doc.text(String(row.points || 0), 180, y);
+      y += 7;
+    });
+    
+    y += 10;
+    
+    // Section 2: Parent Teams Standings
+    if (y > 230) {
+      doc.addPage();
+      y = 20;
+    }
+    
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.text("2. Parent Teams Standings", 14, y);
+    y += 6;
+    
+    doc.setFontSize(9);
+    doc.text("Rank", 14, y);
+    doc.text("Parent Team Name", 25, y);
+    doc.text("Root", 80, y);
+    doc.text("Wins", 125, y);
+    doc.text("Losses", 145, y);
+    doc.text("Points", 180, y);
+    
+    y += 3;
+    doc.line(14, y, 196, y);
+    y += 6;
+    
+    doc.setFont("helvetica", "normal");
+    data.parents.forEach((row: any, idx: number) => {
+      if (y > 270) {
+        doc.addPage();
+        y = 20;
+      }
+      doc.text(String(idx + 1), 14, y);
+      doc.text(row.name || "N/A", 25, y);
+      doc.text(row.rootName || "N/A", 80, y);
+      doc.text(String(row.wins || 0), 125, y);
+      doc.text(String(row.losses || 0), 145, y);
+      doc.text(String(row.points || 0), 180, y);
+      y += 7;
+    });
+    
+    y += 10;
+    
+    // Section 3: Chapters Standings
+    if (y > 230) {
+      doc.addPage();
+      y = 20;
+    }
+    
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.text("3. Chapters Standings", 14, y);
+    y += 6;
+    
+    doc.setFontSize(9);
+    doc.text("Rank", 14, y);
+    doc.text("Chapter Name", 25, y);
+    doc.text("Parent Team", 80, y);
+    doc.text("Players", 130, y);
+    doc.text("Points", 180, y);
+    
+    y += 3;
+    doc.line(14, y, 196, y);
+    y += 6;
+    
+    doc.setFont("helvetica", "normal");
+    data.chapters.forEach((row: any, idx: number) => {
+      if (y > 270) {
+        doc.addPage();
+        y = 20;
+      }
+      doc.text(String(idx + 1), 14, y);
+      doc.text(row.name || "N/A", 25, y);
+      doc.text(row.parentName || "N/A", 80, y);
+      doc.text(String(row.playerCount || 0), 130, y);
+      doc.text(String(row.points || 0), 180, y);
+      y += 7;
+    });
+    
+    doc.save("hierarchy_points_standings.pdf");
+  };
+
   // Filter pool of tournament players based on search query and assignment status
   const filteredPlayers = tournamentPlayers.filter(p => {
     // Hide player if they are already assigned in ANY roster (allRootsPlayers contains all assignments)
@@ -1747,15 +1859,59 @@ export default function HierarchyManager({
                 setSelectedLevel1Id(null);
                 setSelectedLevel2Id(null);
               }}
-              className="bg-slate-50 border border-slate-200 text-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer max-w-xs"
+              className="bg-slate-50 border border-slate-200 text-slate-700 rounded-lg px-2.5 py-1.5 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer max-w-xs bg-white"
             >
               <option value="">-- Select Tournament --</option>
+              <option value="_master_">🌐 [Global] Default Master Hierarchy</option>
               <option value="all">🌟 All Tournaments (Calculate All Data)</option>
-              {tournaments.map(t => (
-                <option key={t.id} value={t.id}>{t.name}</option>
+              {tournaments.filter(t => t.id !== '_master_').map(t => (
+                <option key={t.id} value={t.id}>{t.name || t.id}</option>
               ))}
             </select>
           </div>
+
+          {selectedTournamentId === '_master_' && (
+            <div className="mt-4 p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-center gap-3">
+              <span className="text-xl">🌐</span>
+              <div className="space-y-0.5">
+                <p className="text-xs text-amber-900 font-bold">Editing Global Default Master Hierarchy</p>
+                <p className="text-[11px] text-amber-700 font-medium">
+                  Changes made here will be shared as the default hierarchy for all tournaments that do not have custom hierarchies.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {selectedTournamentId && selectedTournamentId !== 'all' && selectedTournamentId !== '_master_' && (
+            <div className="mt-4 p-4 bg-indigo-50 border border-indigo-100 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <p className="text-xs text-indigo-900 font-bold flex items-center gap-1.5">
+                  <span className="flex h-2 w-2 relative">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+                  </span>
+                  Unified Master Hierarchy Active
+                </p>
+                <p className="text-[11px] text-indigo-700 font-medium">
+                  This tournament automatically shares the **Unified Master Hierarchy Structure**. Edit structure under the Master Tournament; player rosters and scores remain tournament-specific.
+                </p>
+              </div>
+              <div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedTournamentId('_master_');
+                    setSelectedRootId(null);
+                    setSelectedLevel1Id(null);
+                    setSelectedLevel2Id(null);
+                  }}
+                  className="px-3.5 py-1.5 bg-indigo-100 hover:bg-indigo-200 text-indigo-800 text-xs font-bold rounded-lg transition cursor-pointer whitespace-nowrap"
+                >
+                  Go to Master Tournament
+                </button>
+              </div>
+            </div>
+          )}
           
           {/* Selected Hierarchy Breadcrumbs */}
           {(selectedRootId || selectedLevel1Id || selectedLevel2Id) && (
@@ -1779,8 +1935,16 @@ export default function HierarchyManager({
           )}
         </div>
 
-        {/* View Switcher Toggle Buttons */}
-        <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-xl border border-slate-200 overflow-x-auto max-w-full pb-2 md:pb-1.5 scrollbar-thin">
+        <div className="flex flex-wrap items-center gap-3 shrink-0">
+          <button
+            onClick={downloadHierarchyPDF}
+            className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 active:scale-98 text-white text-xs font-black rounded-xl transition shadow-xs cursor-pointer flex items-center gap-1"
+            title="Download PDF Standings"
+          >
+            Download PDF
+          </button>
+          {/* View Switcher Toggle Buttons */}
+          <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-xl border border-slate-200 overflow-x-auto max-w-full pb-2 md:pb-1.5 scrollbar-thin">
           <button
             onClick={() => setViewMode('chain')}
             className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shrink-0 whitespace-nowrap ${
@@ -1831,6 +1995,7 @@ export default function HierarchyManager({
           )}
         </div>
       </div>
+    </div>
 
       {!selectedTournamentId ? (
         <div className="bg-white p-12 rounded-3xl border border-slate-100 shadow-sm text-center max-w-md mx-auto space-y-4">
@@ -1850,12 +2015,13 @@ export default function HierarchyManager({
                 setSelectedLevel1Id(null);
                 setSelectedLevel2Id(null);
               }}
-              className="w-full bg-indigo-50 border border-indigo-100 text-indigo-900 rounded-xl px-3.5 py-2.5 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer text-center"
+              className="w-full bg-indigo-50 border border-indigo-100 text-indigo-900 rounded-xl px-3.5 py-2.5 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer text-center bg-white"
             >
               <option value="">-- Choose Tournament --</option>
+              <option value="_master_">🌐 [Global] Default Master Hierarchy</option>
               <option value="all">🌟 All Tournaments (Calculate All Data)</option>
-              {tournaments.map(t => (
-                <option key={t.id} value={t.id}>{t.name}</option>
+              {tournaments.filter(t => t.id !== '_master_').map(t => (
+                <option key={t.id} value={t.id}>{t.name || t.id}</option>
               ))}
             </select>
           </div>
@@ -2938,8 +3104,8 @@ export default function HierarchyManager({
                     className="bg-transparent text-white font-semibold text-xs focus:outline-none cursor-pointer border-none p-0 pr-6"
                   >
                     <option value="" className="text-slate-900">-- Choose Tournament --</option>
-                    {tournaments.map(t => (
-                      <option key={t.id} value={t.id} className="text-slate-900">{t.name}</option>
+                    {tournaments.filter(t => t.id !== '_master_').map(t => (
+                      <option key={t.id} value={t.id} className="text-slate-900">{t.name || t.id}</option>
                     ))}
                   </select>
                 </div>

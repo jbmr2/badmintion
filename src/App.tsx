@@ -36,7 +36,9 @@ import {
   UserCheck, 
   Menu, 
   PlusCircle, 
-  Sparkles 
+  Sparkles,
+  Sun,
+  Moon
 } from 'lucide-react';
 
 type Step = 'home' | 'setup' | 'details' | 'categories' | 'players' | 'groups' | 'hierarchy' | 'fixtures' | 'scores' | 'points' | 'bracket' | 'champion' | 'monitor' | 'referee' | 'global-players' | 'roles' | 'apis';
@@ -44,12 +46,31 @@ type Step = 'home' | 'setup' | 'details' | 'categories' | 'players' | 'groups' |
 export default function App() {
   const [step, setStep] = useState<Step>(() => (localStorage.getItem('app-step') as Step) || 'home');
   const [tournamentId, setTournamentId] = useState<string | null>(() => localStorage.getItem('tournament-id'));
+  const [selectedGame, setSelectedGame] = useState<'badminton' | 'pickleball' | 'table_tennis' | null>(() => {
+    return (localStorage.getItem('app-selected-game') as 'badminton' | 'pickleball' | 'table_tennis') || null;
+  });
   const [editingTournamentId, setEditingTournamentId] = useState<string | null>(null);
+  const [tournamentDetails, setTournamentDetails] = useState<any | null>(null);
   const [user, setUser] = useState<any>(null);
   const [userRole, setUserRole] = useState<'admin' | 'scorer' | 'user'>('user');
   const [loading, setLoading] = useState(true);
   const [homeTab, setHomeTab] = useState<'tournaments' | 'hierarchy'>('tournaments');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [darkMode, setDarkMode] = useState<boolean>(() => {
+    return localStorage.getItem('app-theme') === 'dark';
+  });
+
+  useEffect(() => {
+    if (darkMode) {
+      document.documentElement.classList.add('dark');
+      document.body.classList.add('dark');
+      localStorage.setItem('app-theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      document.body.classList.remove('dark');
+      localStorage.setItem('app-theme', 'light');
+    }
+  }, [darkMode]);
 
   useEffect(() => {
     localStorage.setItem('app-step', step);
@@ -59,6 +80,35 @@ export default function App() {
       localStorage.removeItem('tournament-id');
     }
   }, [step, tournamentId]);
+
+  useEffect(() => {
+    if (selectedGame) {
+      localStorage.setItem('app-selected-game', selectedGame);
+    } else {
+      localStorage.removeItem('app-selected-game');
+    }
+  }, [selectedGame]);
+
+  useEffect(() => {
+    if (!tournamentId) {
+      setTournamentDetails(null);
+      return;
+    }
+    const unsubscribe = onSnapshot(doc(db, 'tournaments', tournamentId), (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        setTournamentDetails({ id: snapshot.id, ...data });
+        if (data && data.sport) {
+          setSelectedGame(data.sport);
+        }
+      } else {
+        setTournamentDetails(null);
+      }
+    }, (error) => {
+      console.error("Error reading tournament details for header:", error);
+    });
+    return () => unsubscribe();
+  }, [tournamentId]);
 
   // Prevent standard 'user' role from staying on 'monitor' step
   useEffect(() => {
@@ -172,23 +222,219 @@ export default function App() {
   }
 
   if (loading) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
+
+  const GAMES = {
+    badminton: {
+      name: 'Badminton',
+      title: 'Badminton Tournament Manager',
+      icon: '🏸',
+      desc: 'Setup singles, doubles, and mixed matches. Support for standard 21-point sets with cap up to 30.',
+      colorClass: 'emerald',
+      themeColor: 'bg-emerald-600 hover:bg-emerald-700 text-white',
+      badgeColor: 'bg-emerald-50 border-emerald-200 text-emerald-800'
+    },
+    pickleball: {
+      name: 'Pickleball',
+      title: 'Pickleball Tournament Manager',
+      icon: '🏓',
+      desc: 'Optimized for pickleball double & single tournaments. Supports 11-point or 15-point games, win by 2 rules.',
+      colorClass: 'amber',
+      themeColor: 'bg-amber-500 hover:bg-amber-600 text-white',
+      badgeColor: 'bg-amber-50 border-amber-200 text-amber-800'
+    },
+    table_tennis: {
+      name: 'Table Tennis',
+      title: 'Table Tennis Tournament Manager',
+      icon: '🏓',
+      desc: 'Manage fast-paced table tennis leagues and brackets. Best-of-3 or Best-of-5 structures with 11-point games.',
+      colorClass: 'rose',
+      themeColor: 'bg-rose-500 hover:bg-rose-600 text-white',
+      badgeColor: 'bg-rose-50 border-rose-200 text-rose-800'
+    }
+  };
+
+  if (!selectedGame) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col justify-center items-center p-4 sm:p-6 font-sans relative overflow-hidden">
+        {/* Top-right action bar */}
+        <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+          {user ? (
+            <div className="flex items-center gap-2">
+              <span className="hidden sm:inline text-xs font-bold text-slate-500 bg-white border border-slate-200/60 px-3 py-2 rounded-xl">
+                👤 {user.email}
+              </span>
+              <button 
+                onClick={signOutUser} 
+                className="px-3 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-xl font-bold text-xs transition-all cursor-pointer"
+              >
+                Sign Out
+              </button>
+            </div>
+          ) : (
+            <button 
+              onClick={signInWithGoogle} 
+              className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs shadow-xs transition-all cursor-pointer"
+            >
+              Sign In
+            </button>
+          )}
+          <button
+            onClick={() => setDarkMode(!darkMode)}
+            className="p-2 bg-white border border-slate-200/80 rounded-xl shadow-xs hover:bg-slate-100 text-slate-700 transition flex items-center justify-center cursor-pointer"
+            title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
+          >
+            {darkMode ? <Sun className="w-4 h-4 text-amber-500" /> : <Moon className="w-4 h-4 text-indigo-600" />}
+          </button>
+        </div>
+
+        {/* Decorative background blobs */}
+        <div className="absolute top-0 -left-4 w-72 h-72 bg-indigo-200 rounded-full mix-blend-multiply filter blur-2xl opacity-20 animate-blob" />
+        <div className="absolute bottom-10 -right-4 w-80 h-80 bg-emerald-200 rounded-full mix-blend-multiply filter blur-2xl opacity-20 animate-blob animation-delay-2000" />
+        
+        <div className="w-full max-w-4xl text-center z-10 space-y-8 py-8 sm:py-12">
+          <div className="space-y-3">
+            <span className="px-3 py-1 bg-indigo-50 border border-indigo-150 text-indigo-700 text-xs font-extrabold uppercase tracking-wider rounded-full">
+              Multi-Sport Tournament Hub
+            </span>
+            <h1 className="text-4xl sm:text-5xl font-black text-slate-900 tracking-tight leading-none">
+              Tournament Manager
+            </h1>
+            <p className="text-slate-500 text-sm sm:text-base max-w-lg mx-auto font-medium">
+              Select a sport to get started. Brackets, groups, categories, and rosters will be automatically tailored to your sport.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl mx-auto px-2">
+            {Object.entries(GAMES).map(([key, game]) => (
+              <motion.div 
+                key={key}
+                whileHover={{ y: -6 }}
+                onClick={() => setSelectedGame(key as any)}
+                className={`bg-white border border-slate-100 rounded-3xl p-6 shadow-xs hover:shadow-xl transition-all duration-200 cursor-pointer text-left flex flex-col justify-between h-[320px] group relative overflow-hidden`}
+              >
+                <div className={`absolute top-0 right-0 w-24 h-24 ${key === 'badminton' ? 'bg-emerald-50' : key === 'pickleball' ? 'bg-amber-50' : 'bg-rose-50'} rounded-full -mr-6 -mt-6 group-hover:scale-110 transition-transform duration-300`} />
+                <div className="space-y-4">
+                  <div className={`w-12 h-12 ${key === 'badminton' ? 'bg-emerald-50 text-emerald-600' : key === 'pickleball' ? 'bg-amber-50 text-amber-500' : 'bg-rose-50 text-rose-500'} rounded-2xl flex items-center justify-center text-2xl font-bold shadow-xs relative z-10`}>
+                    {game.icon}
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-extrabold text-slate-800 tracking-tight group-hover:text-indigo-600 transition">{game.name}</h3>
+                    <p className="text-slate-400 text-[10px] uppercase tracking-wider font-semibold mt-0.5">Tournament Arena</p>
+                  </div>
+                  <p className="text-slate-500 text-xs leading-relaxed">
+                    {game.desc}
+                  </p>
+                </div>
+                <div className={`w-full py-3 text-white rounded-xl text-center text-xs font-black shadow-md transition ${key === 'badminton' ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-100' : key === 'pickleball' ? 'bg-amber-500 hover:bg-amber-600 shadow-amber-100' : 'bg-rose-500 hover:bg-rose-600 shadow-rose-100'}`}>
+                  Manage {game.name}
+                </div>
+              </motion.div>
+            ))}
+          </div>
+          
+          <div className="text-[11px] text-slate-400 font-bold uppercase tracking-wider">
+            All sports share the same database. Data separation is clean & secure.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const currentGameInfo = GAMES[selectedGame];
+
   return (
     <div className="min-h-screen bg-gray-50 font-sans flex flex-col">
       <div className="p-4 sm:p-6 flex-1">
         <header className="mb-6 sm:mb-8 border-b pb-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
-            <h1 className="text-xl sm:text-3xl font-black tracking-tight text-gray-900 leading-tight">Badminton Tournament Manager</h1>
+            <h1 className="text-xl sm:text-3xl font-black tracking-tight text-gray-900 leading-tight">
+              {currentGameInfo.title}
+            </h1>
             <p className="text-gray-500 text-xs sm:text-sm">Manage your tournament flow from start to finish.</p>
           </div>
           {user ? (
-            <div className="flex gap-2 w-full sm:w-auto justify-between sm:justify-start">
+            <div className="flex gap-2 w-full sm:w-auto justify-between sm:justify-start items-center animate-fade-in">
+              <button
+                onClick={() => setDarkMode(!darkMode)}
+                className="p-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl shadow-xs hover:bg-slate-100 transition flex items-center justify-center cursor-pointer"
+                title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
+              >
+                {darkMode ? <Sun className="w-4 h-4 text-amber-500" /> : <Moon className="w-4 h-4 text-indigo-600" />}
+              </button>
+              <button 
+                onClick={() => {
+                  setSelectedGame(null);
+                  setStep('home');
+                  setTournamentId(null);
+                }}
+                className="px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-lg font-bold hover:bg-indigo-100 text-xs sm:text-sm border border-indigo-150 flex items-center gap-1.5 transition-all"
+                title="Switch to another game"
+              >
+                <span>{currentGameInfo.icon}</span>
+                <span>Switch Sport</span>
+              </button>
               {step !== 'home' && <button onClick={goBack} className="px-3.5 py-1.5 sm:px-4 sm:py-2 bg-gray-200 text-gray-900 rounded-md font-semibold hover:bg-gray-300 text-xs sm:text-sm">Back</button>}
               <button onClick={signOutUser} className="px-3.5 py-1.5 sm:px-4 sm:py-2 bg-gray-200 text-gray-900 rounded-md font-semibold hover:bg-gray-300 text-xs sm:text-sm ml-auto sm:ml-0">Sign Out</button>
             </div>
           ) : (
-            <button onClick={signInWithGoogle} className="w-full sm:w-auto px-4 py-2 bg-blue-600 text-white rounded-md font-semibold hover:bg-blue-700 text-sm">Sign In with Google</button>
+            <div className="flex gap-2 w-full sm:w-auto items-center animate-fade-in">
+              <button
+                onClick={() => setDarkMode(!darkMode)}
+                className="p-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl shadow-xs hover:bg-slate-100 transition flex items-center justify-center cursor-pointer mr-1"
+                title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
+              >
+                {darkMode ? <Sun className="w-4 h-4 text-amber-500" /> : <Moon className="w-4 h-4 text-indigo-600" />}
+              </button>
+              <button 
+                onClick={() => setSelectedGame(null)}
+                className="px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-lg font-bold hover:bg-indigo-100 text-xs sm:text-sm border border-indigo-150 flex items-center gap-1.5 transition-all mr-2"
+              >
+                <span>{currentGameInfo.icon}</span>
+                <span>Switch Sport</span>
+              </button>
+              <button onClick={signInWithGoogle} className="w-full sm:w-auto px-4 py-2 bg-blue-600 text-white rounded-md font-semibold hover:bg-blue-700 text-sm">Sign In with Google</button>
+            </div>
           )}
         </header>
+
+        {tournamentDetails && step !== 'home' && step !== 'setup' && (
+          <div className="max-w-4xl mx-auto mb-6 bg-indigo-900 text-white p-5 rounded-2xl border border-indigo-950 shadow-md flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-0.5 bg-indigo-700 text-indigo-100 rounded-md font-black text-[10px] tracking-wider uppercase">Active Tournament</span>
+                {tournamentDetails.isPublished && (
+                  <span className="px-2 py-0.5 bg-emerald-500 text-white rounded-md font-black text-[10px] tracking-wider uppercase">Published</span>
+                )}
+                <span className="px-2 py-0.5 bg-slate-900/40 text-indigo-200 border border-indigo-700/30 rounded-md font-black text-[10px] tracking-wider uppercase flex items-center gap-1">
+                  <span>{currentGameInfo.icon}</span>
+                  <span>{currentGameInfo.name}</span>
+                </span>
+              </div>
+              <h2 className="text-xl font-extrabold mt-1 tracking-tight">{tournamentDetails.name}</h2>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-indigo-200 mt-1.5">
+                {tournamentDetails.date && <span>📅 {tournamentDetails.date}</span>}
+                {tournamentDetails.location && <span>📍 {tournamentDetails.location}</span>}
+                {tournamentDetails.scoringFormat && <span>{currentGameInfo.icon} {tournamentDetails.scoringFormat}</span>}
+                {tournamentDetails.category && <span>🏷️ {tournamentDetails.category}</span>}
+              </div>
+              {tournamentDetails.categories && Array.isArray(tournamentDetails.categories) && tournamentDetails.categories.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-2.5">
+                  {tournamentDetails.categories.map((cat: string) => (
+                    <span key={cat} className="px-2 py-0.5 bg-indigo-950/40 text-indigo-200 border border-indigo-700/30 rounded-md font-bold text-[10px]">
+                      🏷️ {cat}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="text-left md:text-right bg-indigo-800/60 px-3.5 py-2 rounded-xl border border-indigo-700/50">
+              <p className="text-[10px] uppercase font-bold tracking-wider text-indigo-300">Share / View Link</p>
+              <p className="text-xs font-mono font-bold mt-0.5 text-indigo-100">
+                Code: <span className="text-emerald-400 font-extrabold select-all">{tournamentDetails.id}</span>
+              </p>
+            </div>
+          </div>
+        )}
 
         <main className={`${step === 'monitor' || step === 'hierarchy' || (step === 'home' && homeTab === 'hierarchy') ? 'max-w-5xl' : 'max-w-4xl'} mx-auto transition-all duration-300`}>
           {!user ? (
@@ -228,6 +474,7 @@ export default function App() {
                   {homeTab === 'tournaments' ? (
                     <TournamentList 
                       userRole={userRole}
+                      selectedGame={selectedGame}
                       onCreateTournament={() => {
                         setEditingTournamentId(null);
                         setStep('setup');
@@ -255,6 +502,7 @@ export default function App() {
                 <motion.div key="setup" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
                   <TournamentSetup 
                     userRole={userRole}
+                    selectedGame={selectedGame}
                     onNext={(id) => {
                       setEditingTournamentId(null);
                       handleTournamentCreated(id);
@@ -274,7 +522,7 @@ export default function App() {
               )}
               {step === 'categories' && tournamentId && (
                 <motion.div key="categories" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-                  <CategoryManager tournamentId={tournamentId} onNext={() => setStep('players')} userRole={userRole} />
+                  <CategoryManager tournamentId={tournamentId} selectedGame={selectedGame} onNext={() => setStep('players')} userRole={userRole} />
                 </motion.div>
               )}
               {step === 'players' && tournamentId && (

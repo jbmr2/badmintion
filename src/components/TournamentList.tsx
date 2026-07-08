@@ -9,17 +9,20 @@ export default function TournamentList({
   onSelectTournament,
   onEditTournament,
   onViewGlobalPlayers,
-  userRole = 'user'
+  userRole = 'user',
+  selectedGame = 'badminton'
 }: { 
   onCreateTournament: () => void; 
   onSelectTournament: (id: string) => void;
   onEditTournament: (id: string) => void;
   onViewGlobalPlayers: () => void;
   userRole?: 'admin' | 'scorer' | 'user';
+  selectedGame?: 'badminton' | 'pickleball' | 'table_tennis';
 }) {
   const [tournaments, setTournaments] = useState<any[]>([]);
   const [tournamentToDelete, setTournamentToDelete] = useState<any | null>(null);
   const [qrCodeTournament, setQrCodeTournament] = useState<any | null>(null);
+  const [statusFilter, setStatusFilter] = useState<'all' | 'live' | 'upcoming' | 'completed'>('all');
 
   useEffect(() => {
     const q = query(collection(db, 'tournaments'));
@@ -31,6 +34,25 @@ export default function TournamentList({
   }, []);
 
   const isAdmin = userRole === 'admin';
+
+  const getTournamentStatus = (t: any) => {
+    const today = new Date().toISOString().split('T')[0];
+    if (t.startDate && today < t.startDate) return 'upcoming';
+    if (t.endDate && today > t.endDate) return 'completed';
+    return 'live';
+  };
+
+  const displayedTournaments = tournaments
+    .filter(t => t.id !== '_master_')
+    .filter(t => {
+      // Clean data separation: fallback to badminton for legacy/existing records
+      const tSport = t.sport || 'badminton';
+      return tSport === selectedGame;
+    })
+    .filter(t => {
+      if (statusFilter === 'all') return true;
+      return getTournamentStatus(t) === statusFilter;
+    });
 
   return (
     <div className="space-y-6">
@@ -57,12 +79,24 @@ export default function TournamentList({
         </div>
       </div>
       
-      {tournaments.length === 0 ? (
+      <div className="flex w-full p-1 bg-white border border-slate-200 rounded-xl overflow-x-auto whitespace-nowrap self-start">
+        {(['all', 'live', 'upcoming', 'completed'] as const).map(filter => (
+          <button
+            key={filter}
+            onClick={() => setStatusFilter(filter)}
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition capitalize ${statusFilter === filter ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'}`}
+          >
+            {filter}
+          </button>
+        ))}
+      </div>
+      
+      {displayedTournaments.length === 0 ? (
         <div className="p-12 border-2 border-dashed border-gray-200 rounded-2xl text-center text-gray-400 bg-white">
           <p className="font-bold text-slate-600">No tournaments found</p>
           <p className="text-xs text-slate-400 mt-1 max-w-xs mx-auto">
             {isAdmin 
-              ? "Get started by creating your first badminton tournament using the setup wizard."
+              ? `Get started by creating your first ${selectedGame === 'table_tennis' ? 'table tennis' : selectedGame === 'pickleball' ? 'pickleball' : 'badminton'} tournament using the setup wizard.`
               : "Contact your tournament administrator to set up a new tournament."
             }
           </p>
@@ -76,8 +110,8 @@ export default function TournamentList({
           )}
         </div>
       ) : (
-        <div className="grid gap-4">
-          {tournaments.map(t => (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {displayedTournaments.map(t => (
             <div 
               key={t.id} 
               onClick={() => onSelectTournament(t.id)} 

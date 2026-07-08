@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { jsPDF } from 'jspdf';
 import { motion, AnimatePresence } from 'motion/react';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { 
@@ -48,7 +49,7 @@ export default function PlayerManager({
   const isAdmin = userRole === 'admin';
   const [players, setPlayers] = useState<any[]>([]);
   const [selectedPlayerForMatches, setSelectedPlayerForMatches] = useState<{ id: string; name: string } | null>(null);
-  const [player, setPlayer] = useState({ name: '', age: '', mobile: '', gender: 'Male' });
+  const [player, setPlayer] = useState({ name: '', age: '', mobile: '', gender: 'Male', email: '' });
   const [partnerGender, setPartnerGender] = useState('Female');
   const [selectedChapterId, setSelectedChapterId] = useState<string>('');
   const [selectedGroupId, setSelectedGroupId] = useState<string>('');
@@ -213,7 +214,7 @@ export default function PlayerManager({
   // 2. Fetch Roots
   useEffect(() => {
     if (!tournamentId) return;
-    const qRoots = query(collection(db, `tournaments/${tournamentId}/roots`));
+    const qRoots = query(collection(db, `tournaments/_master_/roots`));
     return onSnapshot(qRoots, (snapshot) => {
       setRoots(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
     }, (e) => console.error("Error fetching roots:", e));
@@ -226,7 +227,7 @@ export default function PlayerManager({
       return;
     }
     const unsubscribes = roots.map(root => {
-      const q = query(collection(db, `tournaments/${tournamentId}/roots/${root.id}/level1`));
+      const q = query(collection(db, `tournaments/_master_/roots/${root.id}/level1`));
       return onSnapshot(q, (snapshot) => {
         setAllRootsLevel1(prev => {
           const filtered = prev.filter(item => item.rootId !== root.id);
@@ -245,7 +246,7 @@ export default function PlayerManager({
       return;
     }
     const unsubscribes = allRootsLevel1.map(l1 => {
-      const q = query(collection(db, `tournaments/${tournamentId}/roots/${l1.rootId}/level1/${l1.id}/level2`));
+      const q = query(collection(db, `tournaments/_master_/roots/${l1.rootId}/level1/${l1.id}/level2`));
       return onSnapshot(q, (snapshot) => {
         setAllRootsLevel2(prev => {
           const filtered = prev.filter(item => item.level1Id !== l1.id);
@@ -311,8 +312,29 @@ export default function PlayerManager({
 
     try {
       // Helper to add a player
-      const addPlayerToDb = async (pName: string, pAge: string, pMobile: string, pGender: string, pairId?: string) => {
+      const addPlayerToDb = async (pName: string, pAge: string, pMobile: string, pGender: string, pEmail?: string, pairId?: string) => {
         const pMobileTrimmed = pMobile.trim();
+        let playerChapterId = selectedChapterId;
+        
+        // Auto-connect with master registry L2
+        let matchedGlobalL2Name = "";
+        const globalPlayerSnap = await getDoc(doc(db, 'players', pMobileTrimmed));
+        if (globalPlayerSnap.exists()) {
+          const globalData = globalPlayerSnap.data();
+          if (globalData.l2) {
+            matchedGlobalL2Name = globalData.l2;
+            if (!playerChapterId) {
+              const globalL2Normalized = globalData.l2.trim().toLowerCase();
+              const matchingChapter = allRootsLevel2.find(c => c.name.trim().toLowerCase() === globalL2Normalized);
+              if (matchingChapter) {
+                playerChapterId = matchingChapter.id;
+              } else {
+                console.log("No matching chapter found for:", globalData.l2);
+              }
+            }
+          }
+        }
+
         const playersCol = collection(db, `tournaments/${tournamentId}/players`);
         const pRef = doc(playersCol);
         const pId = pRef.id;
@@ -321,17 +343,38 @@ export default function PlayerManager({
           name: pName.trim(),
           age: pAge ? Number(pAge) : '',
           mobile: pMobileTrimmed,
+          email: pEmail || '',
           gender: pGender,
           pairId: pairId || null,
           createdAt: new Date().toISOString()
         });
+
+        // Resolve chapter name for global player sync
+        let finalL2Name = matchedGlobalL2Name;
+        if (playerChapterId) {
+          const chapter = allRootsLevel2.find(c => c.id === playerChapterId);
+          if (chapter) {
+            finalL2Name = chapter.name;
+            // Write tournament-specific assignment linking to the master hierarchy
+            const newRosterRef = doc(db, `tournaments/${tournamentId}/roots/${chapter.rootId}/level1/${chapter.level1Id}/level2/${chapter.id}/players`, pId);
+            await setDoc(newRosterRef, {
+              name: pName.trim(),
+              age: pAge ? Number(pAge) : '',
+              mobile: pMobileTrimmed,
+              gender: pGender || 'Male',
+              assignedAt: new Date().toISOString()
+            });
+          }
+        }
 
         const globalPlayerRef = doc(db, 'players', pMobileTrimmed);
         await setDoc(globalPlayerRef, {
           name: pName.trim(),
           age: pAge ? Number(pAge) : '',
           mobile: pMobileTrimmed,
+          email: pEmail || '',
           gender: pGender,
+          ...(finalL2Name ? { l2: finalL2Name } : {}),
           updatedAt: new Date().toISOString()
         }, { merge: true });
 
@@ -339,7 +382,7 @@ export default function PlayerManager({
       };
 
       const pairId = isDoublesMode ? `pair_${Date.now()}` : undefined;
-      const player1 = await addPlayerToDb(player.name, player.age, mobileTrimmed, player.gender || 'Male', pairId);
+      const player1 = await addPlayerToDb(player.name, player.age, mobileTrimmed, player.gender || 'Male', player.email, pairId);
       let playersAdded = [player1];
 
       if (isDoublesMode) {
@@ -347,7 +390,7 @@ export default function PlayerManager({
            alert("Partner details are required for doubles registration.");
            return;
         }
-        const player2 = await addPlayerToDb(partnerName, '', partnerMobile, partnerGender || 'Female', pairId);
+        const player2 = await addPlayerToDb(partnerName, '', partnerMobile, partnerGender || 'Female', undefined, pairId);
         playersAdded.push(player2);
       }
 
@@ -362,22 +405,7 @@ export default function PlayerManager({
         }
       }
 
-      // Assign to chapter (L2)
-      if (selectedChapterId) {
-        const chapter = allRootsLevel2.find(c => c.id === selectedChapterId);
-        if (chapter) {
-          for (const p of playersAdded) {
-            const newRosterRef = doc(db, `tournaments/${tournamentId}/roots/${chapter.rootId}/level1/${chapter.level1Id}/level2/${chapter.id}/players`, p.id);
-            await setDoc(newRosterRef, {
-              name: p.name,
-              gender: p.gender || 'Male',
-              assignedAt: new Date().toISOString()
-            });
-          }
-        }
-      }
-
-      setPlayer({ name: '', age: '', mobile: '', gender: 'Male' });
+      setPlayer({ name: '', age: '', mobile: '', gender: 'Male', email: '' });
       setPartnerName('');
       setPartnerMobile('');
       setPartnerGender('Female');
@@ -612,6 +640,86 @@ export default function PlayerManager({
            (assignedGroup && assignedGroup.name.toLowerCase().includes(q)) ||
            (l2Name && l2Name.includes(q));
   });
+
+  const downloadPlayersPDF = () => {
+    const doc = new jsPDF();
+    
+    // Header
+    doc.setFontSize(18);
+    doc.setFont("helvetica", "bold");
+    doc.text("Badminton Tournament Players Pool", 14, 22);
+    
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Generated: ${new Date().toLocaleDateString()}`, 14, 28);
+    doc.text(`Total Players: ${players.length}`, 14, 34);
+    
+    // Draw horizontal line
+    doc.setDrawColor(200, 200, 200);
+    doc.line(14, 38, 196, 38);
+    
+    let y = 46;
+    doc.setFontSize(10);
+    
+    // Headers
+    doc.setFont("helvetica", "bold");
+    doc.text("#", 14, y);
+    doc.text("Name", 22, y);
+    doc.text("Gender", 75, y);
+    doc.text("Age", 95, y);
+    doc.text("Phone", 110, y);
+    doc.text("Group", 140, y);
+    doc.text("Chapter (L2)", 170, y);
+    
+    doc.line(14, y + 2, 196, y + 2);
+    y += 8;
+    
+    doc.setFont("helvetica", "normal");
+    filteredPlayersList.forEach((p, index) => {
+      if (y > 280) {
+        doc.addPage();
+        y = 20;
+        doc.setFont("helvetica", "bold");
+        doc.text("#", 14, y);
+        doc.text("Name", 22, y);
+        doc.text("Gender", 75, y);
+        doc.text("Age", 95, y);
+        doc.text("Phone", 110, y);
+        doc.text("Group", 140, y);
+        doc.text("Chapter (L2)", 170, y);
+        doc.line(14, y + 2, 196, y + 2);
+        y += 8;
+        doc.setFont("helvetica", "normal");
+      }
+      
+      const assignedGroup = groups.find(g => g.playerIds?.includes(p.id));
+      const assignment = allRootsPlayers.find(ap => ap.id === p.id);
+      
+      const numStr = String(index + 1);
+      const nameStr = p.name || "N/A";
+      const genderStr = p.gender || "Male";
+      const ageStr = p.age ? String(p.age) : "-";
+      const phoneStr = p.mobile || "-";
+      const groupStr = assignedGroup ? assignedGroup.name : "-";
+      const chapterStr = assignment ? assignment.chapterName : "-";
+      
+      doc.text(numStr, 14, y);
+      // Truncate name if too long
+      const truncatedName = nameStr.length > 24 ? nameStr.substring(0, 22) + ".." : nameStr;
+      doc.text(truncatedName, 22, y);
+      doc.text(genderStr, 75, y);
+      doc.text(ageStr, 95, y);
+      doc.text(phoneStr, 110, y);
+      doc.text(groupStr, 140, y);
+      
+      const truncatedChapter = chapterStr.length > 12 ? chapterStr.substring(0, 10) + ".." : chapterStr;
+      doc.text(truncatedChapter, 170, y);
+      
+      y += 7;
+    });
+    
+    doc.save("players_list.pdf");
+  };
 
   // Sort chapters for dropdown selection
   const sortedChapters = [...allRootsLevel2].sort((a, b) => {
@@ -1067,22 +1175,13 @@ export default function PlayerManager({
         // Create player profile
         await setDoc(newPlayerRef, playerProfile);
 
-        // Sync to global master players registry (keyed by mobile)
-        if (playerProfile.mobile) {
-          const globalPlayerRef = doc(db, 'players', playerProfile.mobile);
-          await setDoc(globalPlayerRef, {
-            name: playerProfile.name,
-            age: playerProfile.age,
-            mobile: playerProfile.mobile,
-            updatedAt: new Date().toISOString()
-          }, { merge: true });
-        }
-
         // Nested Chapter L2 Assignment
         let finalChapterId = pData.chapterId || selectedChapterId;
+        let finalL2Name = "";
         if (finalChapterId) {
           const chapter = allRootsLevel2.find(c => c.id === finalChapterId);
           if (chapter) {
+            finalL2Name = chapter.name;
             const rosterRef = doc(db, `tournaments/${tournamentId}/roots/${chapter.rootId}/level1/${chapter.level1Id}/level2/${chapter.id}/players`, newId);
             await setDoc(rosterRef, {
               name: playerProfile.name,
@@ -1091,6 +1190,18 @@ export default function PlayerManager({
               assignedAt: new Date().toISOString()
             });
           }
+        }
+
+        // Sync to global master players registry (keyed by mobile)
+        if (playerProfile.mobile) {
+          const globalPlayerRef = doc(db, 'players', playerProfile.mobile);
+          await setDoc(globalPlayerRef, {
+            name: playerProfile.name,
+            age: playerProfile.age,
+            mobile: playerProfile.mobile,
+            ...(finalL2Name ? { l2: finalL2Name } : {}),
+            updatedAt: new Date().toISOString()
+          }, { merge: true });
         }
 
         // Group/Team Assignment
@@ -1228,7 +1339,7 @@ export default function PlayerManager({
           
           <div className="space-y-4">
             {/* Primary Player Block */}
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 items-end">
+            <div className="grid grid-cols-1 sm:grid-cols-5 gap-4 items-end">
               <div className="space-y-1 sm:col-span-2">
                 <label className="text-xs font-bold text-slate-500">{isDoublesMode ? 'Primary Player Name' : 'Player Name'}</label>
                 <input 
@@ -1246,6 +1357,16 @@ export default function PlayerManager({
                   className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition" 
                   placeholder="e.g. 9876543210" 
                   type="tel"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-500">Email</label>
+                <input 
+                  value={player.email} 
+                  onChange={(e) => setPlayer({...player, email: e.target.value})} 
+                  className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-medium focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition" 
+                  placeholder="e.g. john@example.com" 
+                  type="email"
                 />
               </div>
               <div className="space-y-1">
@@ -2021,9 +2142,18 @@ export default function PlayerManager({
               className="w-full pl-10 pr-4 py-2.5 bg-slate-50 hover:bg-slate-100 focus:bg-white border border-slate-200 focus:border-indigo-500 rounded-xl text-sm font-medium outline-none transition focus:ring-2 focus:ring-indigo-500/20"
             />
           </div>
-          <span className="text-xs font-bold text-slate-400 bg-slate-50 border border-slate-100 px-3 py-1.5 rounded-xl self-end sm:self-auto">
-            Total Tournament Pool: {players.length} Players
-          </span>
+          <div className="flex items-center gap-2 self-end sm:self-auto">
+            <button
+              onClick={downloadPlayersPDF}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl transition shadow-sm cursor-pointer"
+              title="Download PDF List of Players"
+            >
+              <FileText className="w-4 h-4" /> PDF
+            </button>
+            <span className="text-xs font-bold text-slate-400 bg-slate-50 border border-slate-100 px-3 py-1.5 rounded-xl">
+              Total Tournament Pool: {players.length} Players
+            </span>
+          </div>
         </div>
 
         {/* Players Cards Grid */}

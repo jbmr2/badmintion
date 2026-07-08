@@ -27,7 +27,7 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
   const [activeTab, setActiveTab] = useState<'list' | 'add' | 'upload'>('list');
 
   // Manual Profile State
-  const [manualForm, setManualForm] = useState({ name: '', age: '', mobile: '', gender: 'Male', l2: '' });
+  const [manualForm, setManualForm] = useState({ name: '', age: '', mobile: '', gender: 'Male', l2: '', email: '' });
   const [editingPlayerId, setEditingPlayerId] = useState<string | null>(null);
   const [isSubmittingManual, setIsSubmittingManual] = useState(false);
 
@@ -99,12 +99,13 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
         name: manualForm.name.trim(),
         age: manualForm.age.trim() ? Number(manualForm.age.trim()) : '',
         mobile: cleanMobile,
+        email: manualForm.email.trim(),
         gender: manualForm.gender || 'Male',
         l2: manualForm.l2.trim(),
         updatedAt: new Date().toISOString()
       }, { merge: true });
 
-      setManualForm({ name: '', age: '', mobile: '', gender: 'Male', l2: '' });
+      setManualForm({ name: '', age: '', mobile: '', gender: 'Male', l2: '', email: '' });
       setEditingPlayerId(null);
       setActiveTab('list');
     } catch (err) {
@@ -123,7 +124,8 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
       age: p.age !== undefined && p.age !== null ? String(p.age) : '',
       mobile: p.mobile || '',
       gender: p.gender || 'Male',
-      l2: p.l2 || ''
+      l2: p.l2 || '',
+      email: p.email || ''
     });
     setActiveTab('add');
   };
@@ -199,7 +201,8 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
         firstLine.includes('phone') || 
         firstLine.includes('mobile') || 
         firstLine.includes('number') || 
-        firstLine.includes('tel')
+        firstLine.includes('tel') ||
+        firstLine.includes('email')
       ) {
         isFirstLineHeader = true;
       }
@@ -233,6 +236,7 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
       let name = "";
       let age = "";
       let mobile = "";
+      let email = "";
       let l2 = "";
 
       if (isFirstLineHeader) {
@@ -240,17 +244,20 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
         const nameIdx = headers.findIndex(h => h.includes('name') || h.includes('player'));
         const ageIdx = headers.findIndex(h => h.includes('age'));
         const mobileIdx = headers.findIndex(h => h.includes('phone') || h.includes('mobile') || h.includes('number') || h.includes('tel'));
+        const emailIdx = headers.findIndex(h => h.includes('email'));
         const l2Idx = headers.findIndex(h => h.includes('chapter') || h.includes('category') || h.includes('l2') || h.includes('class'));
 
         name = nameIdx !== -1 ? cleanCols[nameIdx] || "" : cleanCols[0] || "";
         age = ageIdx !== -1 ? cleanCols[ageIdx] || "" : cleanCols[1] || "";
         mobile = mobileIdx !== -1 ? cleanCols[mobileIdx] || "" : cleanCols[2] || "";
+        email = emailIdx !== -1 ? cleanCols[emailIdx] || "" : (cleanCols[4] || "");
         l2 = l2Idx !== -1 ? cleanCols[l2Idx] || "" : (cleanCols[3] || "");
       } else {
         name = cleanCols[0] || "";
         age = cleanCols[1] || "";
         mobile = cleanCols[2] || "";
         l2 = cleanCols[3] || "";
+        email = cleanCols[4] || "";
       }
 
       const mobileCleaned = mobile.replace(/[^0-9+]/g, '').trim();
@@ -275,6 +282,7 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
         name,
         age,
         mobile: mobileCleaned,
+        email: email.trim(),
         l2: l2.trim(),
         isValid,
         errorMsg
@@ -315,6 +323,7 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
           name: pData.name.trim(),
           age: pData.age ? Number(pData.age) : '',
           mobile: cleanMobile,
+          email: pData.email ? pData.email.trim() : '',
           l2: pData.l2 ? pData.l2.trim() : '',
           updatedAt: new Date().toISOString()
         }, { merge: true });
@@ -372,11 +381,11 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
       {/* Tabs */}
       <div className="flex gap-2 border-b border-slate-100 pb-3">
         <button
-          onClick={() => { setActiveTab('list'); setEditingPlayerId(null); setManualForm({ name: '', age: '', mobile: '' }); }}
+          onClick={() => { setActiveTab('list'); setEditingPlayerId(null); setManualForm({ name: '', age: '', mobile: '', gender: 'Male', l2: '', email: '' }); }}
           className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 ${
             activeTab === 'list' 
-              ? 'bg-slate-900 text-white shadow-xs' 
-              : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+               ? 'bg-slate-900 text-white shadow-xs' 
+               : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
           }`}
         >
           <Users className="w-3.5 h-3.5" />
@@ -404,7 +413,7 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
           <FileSpreadsheet className="w-3.5 h-3.5" />
           Upload Profiles CSV
         </button>
-      </div>
+      </div>Special Instruction: Ensure that you do not define any unused imports or variables.
 
       {/* Tab Contents */}
       {activeTab === 'list' && (
@@ -453,6 +462,7 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
                       <th className="p-3">Age</th>
                       <th className="p-3">Gender</th>
                       <th className="p-3">Phone (Global Key)</th>
+                      <th className="p-3">Email</th>
                       <th className="p-3">Global Chapter (L2)</th>
                       <th className="p-3 text-center pr-4">Actions</th>
                     </tr>
@@ -490,6 +500,7 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
                             {p.mobile}
                           </span>
                         </td>
+                        <td className="p-3 text-slate-600 text-xs font-mono">{p.email || '—'}</td>
                         <td className="p-3">
                           {p.l2 ? (
                             <span className="inline-flex items-center gap-1 bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-lg text-xs font-black border border-indigo-100">
@@ -572,6 +583,17 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
             </div>
 
             <div className="space-y-1">
+              <label className="text-xs font-bold text-slate-500">Email Address</label>
+              <input 
+                value={manualForm.email} 
+                onChange={(e) => setManualForm({...manualForm, email: e.target.value})} 
+                placeholder="e.g. john@example.com" 
+                className="w-full border border-slate-200 p-2.5 rounded-xl text-sm font-semibold focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none bg-white transition"
+                type="email"
+              />
+            </div>
+
+            <div className="space-y-1">
               <label className="text-xs font-bold text-slate-500">Age</label>
               <input 
                 value={manualForm.age} 
@@ -625,7 +647,7 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
             </button>
             <button
               type="button"
-              onClick={() => { setActiveTab('list'); setEditingPlayerId(null); setManualForm({ name: '', age: '', mobile: '', gender: 'Male', l2: '' }); }}
+              onClick={() => { setActiveTab('list'); setEditingPlayerId(null); setManualForm({ name: '', age: '', mobile: '', gender: 'Male', l2: '', email: '' }); }}
               className="px-4 py-2.5 bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 font-bold rounded-xl text-xs transition cursor-pointer"
             >
               Cancel
@@ -722,6 +744,7 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
                       <th className="p-2.5 pl-4">Name</th>
                       <th className="p-2.5">Age</th>
                       <th className="p-2.5">Phone (Global Key)</th>
+                      <th className="p-2.5">Email</th>
                       <th className="p-2.5 text-center pr-4">Status / Action</th>
                     </tr>
                   </thead>
@@ -777,6 +800,18 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
                                 setParsedPlayers(updated);
                               }}
                               className="border border-slate-200 bg-white px-2 py-1 rounded-md w-full font-mono text-[11px] focus:ring-1 focus:ring-indigo-500"
+                            />
+                          </td>
+                          <td className="p-2.5">
+                            <input
+                              value={p.email}
+                              onChange={e => {
+                                const updated = [...parsedPlayers];
+                                updated[idx].email = e.target.value;
+                                setParsedPlayers(updated);
+                              }}
+                              className="border border-slate-200 bg-white px-2 py-1 rounded-md w-full focus:ring-1 focus:ring-indigo-500"
+                              type="email"
                             />
                           </td>
                           <td className="p-2.5 text-center pr-4">

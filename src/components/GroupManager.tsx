@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { jsPDF } from 'jspdf';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, addDoc, query, getDocs, deleteDoc, doc, onSnapshot, updateDoc, writeBatch } from 'firebase/firestore';
 import { 
@@ -20,6 +21,33 @@ import {
   HelpCircle,
   AlertTriangle
 } from 'lucide-react';
+
+const getGroupOrderWeight = (name: string): number => {
+  const n = name.toLowerCase().trim();
+  if (n.includes('final') && !n.includes('semi') && !n.includes('quarter')) return 100;
+  if (n.includes('semi')) return 90;
+  if (n.includes('quarter') && !n.includes('pre')) return 80;
+  if (n.includes('pre_quarter') || n.includes('pre-quarter') || n.includes('pre quarter')) return 70;
+  
+  // Try to match standard "group X" or "X group"
+  const match = n.match(/group\s+([a-z0-9]+)/) || n.match(/([a-z0-9]+)\s+group/);
+  if (match) {
+    const code = match[1];
+    const num = parseInt(code, 10);
+    if (!isNaN(num)) {
+      return 10 + num;
+    }
+    const charCode = code.charCodeAt(0);
+    if (charCode >= 97 && charCode <= 122) { // a-z
+      return 10 + (charCode - 97);
+    }
+  }
+  
+  if (n.includes('group')) {
+    return 19;
+  }
+  return 50;
+};
 
 export default function GroupManager({ 
   tournamentId, 
@@ -224,7 +252,13 @@ export default function GroupManager({
           }
         });
 
-        setGroups(uniqueFetchedGroups.map(g => ({ id: g.id, name: g.name })));
+        const sortedGroups = uniqueFetchedGroups.map(g => ({ id: g.id, name: g.name })).sort((a, b) => {
+          const wA = getGroupOrderWeight(a.name);
+          const wB = getGroupOrderWeight(b.name);
+          if (wA !== wB) return wA - wB;
+          return a.name.localeCompare(b.name);
+        });
+        setGroups(sortedGroups);
         
         const newAssignments: { [playerId: string]: string } = {};
         uniqueFetchedGroups.forEach(group => {
@@ -620,6 +654,86 @@ export default function GroupManager({
     entry.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  const downloadGroupsPDF = () => {
+    const doc = new jsPDF();
+    
+    // Header
+    doc.setFontSize(18);
+    doc.setFont("helvetica", "bold");
+    doc.text("Badminton Tournament Groups & Rosters", 14, 22);
+    
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Generated: ${new Date().toLocaleDateString()}`, 14, 28);
+    doc.text(`Total Groups: ${groups.length}  |  Total Players: ${players.length}`, 14, 34);
+    
+    // Draw horizontal line
+    doc.setDrawColor(200, 200, 200);
+    doc.line(14, 38, 196, 38);
+    
+    let y = 46;
+    
+    groups.forEach((group) => {
+      const groupPlayers = players.filter(p => playerAssignments[p.id] === group.name);
+      
+      // If we don't have enough space for the group header + a couple of players, add a page
+      if (y > 240) {
+        doc.addPage();
+        y = 20;
+      }
+      
+      doc.setFontSize(12);
+      doc.setFont("helvetica", "bold");
+      doc.text(group.name, 14, y);
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "normal");
+      doc.text(`(${groupPlayers.length} players)`, 60, y);
+      
+      y += 4;
+      doc.setDrawColor(230, 230, 230);
+      doc.line(14, y, 196, y);
+      y += 6;
+      
+      if (groupPlayers.length === 0) {
+        doc.setFont("helvetica", "italic");
+        doc.text("No players assigned yet", 20, y);
+        y += 8;
+      } else {
+        doc.setFont("helvetica", "bold");
+        doc.text("#", 14, y);
+        doc.text("Player Name", 25, y);
+        doc.text("Gender", 85, y);
+        doc.text("Age", 105, y);
+        doc.text("Phone / Mobile", 125, y);
+        y += 4;
+        doc.line(14, y, 196, y);
+        y += 6;
+        
+        doc.setFont("helvetica", "normal");
+        groupPlayers.forEach((p, idx) => {
+          if (y > 280) {
+            doc.addPage();
+            y = 20;
+            doc.setFont("helvetica", "bold");
+            doc.text(`${group.name} (Continued)`, 14, y);
+            y += 6;
+          }
+          
+          doc.text(String(idx + 1), 14, y);
+          doc.text(p.name || "N/A", 25, y);
+          doc.text(p.gender || "Male", 85, y);
+          doc.text(p.age ? String(p.age) : "-", 105, y);
+          doc.text(p.mobile || "-", 125, y);
+          
+          y += 7;
+        });
+        y += 4; // Extra space after group
+      }
+    });
+    
+    doc.save("tournament_groups.pdf");
+  };
+
   return (
     <div className="space-y-6">
       {/* HEADER SECTION */}
@@ -647,18 +761,27 @@ export default function GroupManager({
           </div>
           
           {/* Quick Counter Info */}
-          <div className="flex gap-4 bg-slate-800/50 p-4 rounded-2xl border border-slate-700/50 shrink-0">
-            <div className="text-center px-4 border-r border-slate-700/50">
-              <div className="text-2xl font-black text-indigo-400 font-mono">{players.length}</div>
-              <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">Players</div>
-            </div>
-            <div className="text-center px-4 border-r border-slate-700/50">
-              <div className="text-2xl font-black text-emerald-400 font-mono">{groups.length}</div>
-              <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">Groups</div>
-            </div>
-            <div className="text-center px-4">
-              <div className="text-2xl font-black text-amber-400 font-mono">{unassignedPlayers.length}</div>
-              <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">Unassigned</div>
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 shrink-0">
+            <button
+              onClick={downloadGroupsPDF}
+              className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 active:scale-98 text-white text-xs font-extrabold rounded-xl transition shadow-xs cursor-pointer"
+              title="Download PDF Groups & Rosters"
+            >
+              PDF Download
+            </button>
+            <div className="flex gap-4 bg-slate-800/50 p-4 rounded-2xl border border-slate-700/50 shrink-0">
+              <div className="text-center px-4 border-r border-slate-700/50">
+                <div className="text-2xl font-black text-indigo-400 font-mono">{players.length}</div>
+                <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">Players</div>
+              </div>
+              <div className="text-center px-4 border-r border-slate-700/50">
+                <div className="text-2xl font-black text-emerald-400 font-mono">{groups.length}</div>
+                <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">Groups</div>
+              </div>
+              <div className="text-center px-4">
+                <div className="text-2xl font-black text-amber-400 font-mono">{unassignedPlayers.length}</div>
+                <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">Unassigned</div>
+              </div>
             </div>
           </div>
         </div>

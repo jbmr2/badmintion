@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
+import { jsPDF } from 'jspdf';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, query, onSnapshot, addDoc, updateDoc, doc, deleteDoc, getDocs, writeBatch, increment } from 'firebase/firestore';
 import { 
@@ -21,6 +22,33 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import PlayerMatchesModal from './PlayerMatchesModal';
+
+const getGroupOrderWeight = (name: string): number => {
+  const n = name.toLowerCase().trim();
+  if (n.includes('final') && !n.includes('semi') && !n.includes('quarter')) return 100;
+  if (n.includes('semi')) return 90;
+  if (n.includes('quarter') && !n.includes('pre')) return 80;
+  if (n.includes('pre_quarter') || n.includes('pre-quarter') || n.includes('pre quarter')) return 70;
+  
+  // Try to match standard "group X" or "X group"
+  const match = n.match(/group\s+([a-z0-9]+)/) || n.match(/([a-z0-9]+)\s+group/);
+  if (match) {
+    const code = match[1];
+    const num = parseInt(code, 10);
+    if (!isNaN(num)) {
+      return 10 + num;
+    }
+    const charCode = code.charCodeAt(0);
+    if (charCode >= 97 && charCode <= 122) { // a-z
+      return 10 + (charCode - 97);
+    }
+  }
+  
+  if (n.includes('group')) {
+    return 19;
+  }
+  return 50;
+};
 
 interface StandingPlayer {
   playerId: string;
@@ -62,6 +90,19 @@ export default function PointsTable({
   const [leaderboardSort, setLeaderboardSort] = useState<'pointsScored' | 'longestStreak' | 'pointDiff' | 'winRate'>('pointsScored');
   const [leaderboardSearch, setLeaderboardSearch] = useState('');
 
+  const isPlayerFemale = (pId?: string, groupName?: string): boolean => {
+    if (!pId) return false;
+    const p = players.find(x => x.id === pId);
+    if (p?.gender === 'Female' || p?.gender?.toLowerCase() === 'female') {
+      return true;
+    }
+    const gLower = (groupName || '').toLowerCase();
+    if ((gLower.includes('women') || gLower.includes('female')) && !gLower.includes('mixed') && !gLower.includes('open')) {
+      return true;
+    }
+    return false;
+  };
+
   const safeConfirm = (msg: string): boolean => {
     try {
       return window.confirm(msg);
@@ -85,6 +126,9 @@ export default function PointsTable({
   const [allRootsLevel2, setAllRootsLevel2] = useState<any[]>([]);
   const [allRootsPlayers, setAllRootsPlayers] = useState<any[]>([]);
 
+  const isStructureMaster = tournamentId !== '_master_' && (roots.length === 0 || roots.some(r => r.isMasterFallback));
+  const structureTournamentId = isStructureMaster ? '_master_' : tournamentId;
+
   // Manual scheduling state
   const [selectedP1, setSelectedP1] = useState('');
   const [selectedP2, setSelectedP2] = useState('');
@@ -96,18 +140,26 @@ export default function PointsTable({
     if (!tournamentId) return;
     const qRoots = query(collection(db, `tournaments/${tournamentId}/roots`));
     const unsubscribeRoots = onSnapshot(qRoots, (snapshot) => {
-      setRoots(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+      if (snapshot.empty && tournamentId !== '_master_') {
+        const qMasterRoots = query(collection(db, `tournaments/_master_/roots`));
+        const unsubscribeMasterRoots = onSnapshot(qMasterRoots, (masterSnap) => {
+          setRoots(masterSnap.docs.map(d => ({ id: d.id, isMasterFallback: true, ...d.data() })));
+        }, (e) => console.error("Error fetching master roots in PointsTable:", e));
+        return () => unsubscribeMasterRoots();
+      } else {
+        setRoots(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+      }
     }, (e) => console.error("Error fetching roots in PointsTable:", e));
     return () => unsubscribeRoots();
   }, [tournamentId]);
 
   useEffect(() => {
-    if (roots.length === 0 || !tournamentId) {
+    if (roots.length === 0 || !structureTournamentId) {
       setAllRootsLevel1([]);
       return;
     }
     const unsubscribes = roots.map(root => {
-      const q = query(collection(db, `tournaments/${tournamentId}/roots/${root.id}/level1`));
+      const q = query(collection(db, `tournaments/${structureTournamentId}/roots/${root.id}/level1`));
       return onSnapshot(q, (snapshot) => {
         setAllRootsLevel1(prev => {
           const filtered = prev.filter(item => item.rootId !== root.id);
@@ -117,15 +169,15 @@ export default function PointsTable({
       }, (err) => console.error("Error fetching level1s in PointsTable:", err));
     });
     return () => unsubscribes.forEach(unsub => unsub());
-  }, [roots, tournamentId]);
+  }, [roots, structureTournamentId]);
 
   useEffect(() => {
-    if (allRootsLevel1.length === 0 || !tournamentId) {
+    if (allRootsLevel1.length === 0 || !structureTournamentId) {
       setAllRootsLevel2([]);
       return;
     }
     const unsubscribes = allRootsLevel1.map(l1 => {
-      const q = query(collection(db, `tournaments/${tournamentId}/roots/${l1.rootId}/level1/${l1.id}/level2`));
+      const q = query(collection(db, `tournaments/${structureTournamentId}/roots/${l1.rootId}/level1/${l1.id}/level2`));
       return onSnapshot(q, (snapshot) => {
         setAllRootsLevel2(prev => {
           const filtered = prev.filter(item => item.level1Id !== l1.id);
@@ -142,7 +194,7 @@ export default function PointsTable({
       }, (err) => console.error("Error fetching level2s in PointsTable:", err));
     });
     return () => unsubscribes.forEach(unsub => unsub());
-  }, [allRootsLevel1, tournamentId]);
+  }, [allRootsLevel1, structureTournamentId]);
 
   useEffect(() => {
     if (allRootsLevel2.length === 0 || !tournamentId) {
@@ -207,7 +259,13 @@ export default function PointsTable({
             }
           }
         });
-        setGroups(uniqueGroups);
+        const sortedUniqueGroups = uniqueGroups.sort((a, b) => {
+          const wA = getGroupOrderWeight(a.name);
+          const wB = getGroupOrderWeight(b.name);
+          if (wA !== wB) return wA - wB;
+          return a.name.localeCompare(b.name);
+        });
+        setGroups(sortedUniqueGroups);
     });
 
     const qPlayers = query(collection(db, `tournaments/${tournamentId}/players`));
@@ -233,6 +291,359 @@ export default function PointsTable({
   const playerMap = Object.fromEntries(players.map(p => [p.id, p.name]));
   const playerL1Map = Object.fromEntries(allRootsPlayers.map(ap => [ap.id, ap.level1Name]));
   const playerL2Map = Object.fromEntries(allRootsPlayers.map(ap => [ap.id, ap.level2Name]));
+  const playerRootMap = Object.fromEntries(allRootsPlayers.map(ap => [ap.id, ap.rootName]));
+
+  const hierarchyStats = useMemo(() => {
+    const parentStatsMap: Record<string, { wins: number; losses: number; points: number }> = {};
+    const rootStatsMap: Record<string, { wins: number; losses: number; points: number }> = {};
+
+    // Initialize all parent names and root names
+    allRootsLevel1.forEach(l1 => {
+      if (l1.name) {
+        parentStatsMap[l1.name] = { wins: 0, losses: 0, points: 0 };
+      }
+    });
+    roots.forEach(r => {
+      if (r.name) {
+        rootStatsMap[r.name] = { wins: 0, losses: 0, points: 0 };
+      }
+    });
+
+    matches.forEach(match => {
+      const fixture = fixtures.find(f => f.id === match.fixtureId);
+      if (!fixture) return;
+
+      const team1PlayerIds: string[] = [];
+      const team2PlayerIds: string[] = [];
+
+      const isDoublesMatch = !!(fixture.isDoubles || fixture.player1aId || fixture.player1bId || fixture.player2aId || fixture.player2bId);
+      if (isDoublesMatch) {
+        if (fixture.player1aId) team1PlayerIds.push(fixture.player1aId);
+        if (fixture.player1bId) team1PlayerIds.push(fixture.player1bId);
+        if (fixture.player2aId) team2PlayerIds.push(fixture.player2aId);
+        if (fixture.player2bId) team2PlayerIds.push(fixture.player2bId);
+
+        if (team1PlayerIds.length === 0 && fixture.player1Id) team1PlayerIds.push(fixture.player1Id);
+        if (team2PlayerIds.length === 0 && fixture.player2Id) team2PlayerIds.push(fixture.player2Id);
+      } else {
+        if (fixture.player1Id) team1PlayerIds.push(fixture.player1Id);
+        if (fixture.player2Id) team2PlayerIds.push(fixture.player2Id);
+      }
+
+      // Check if family/kids category (to ignore for points)
+      let belongsToFamilyOrKids = false;
+      const allMatchPlayerIds = [...team1PlayerIds, ...team2PlayerIds];
+      for (const pId of allMatchPlayerIds) {
+        const p = allRootsPlayers.find(item => item.id === pId);
+        if (p) {
+          const rName = p.rootName?.toLowerCase() || '';
+          const pName = p.level1Name?.toLowerCase() || '';
+          const cName = p.level2Name?.toLowerCase() || '';
+
+          if (
+            rName.includes('family') || rName.includes('kids') || rName.includes('kid') ||
+            pName.includes('family') || pName.includes('kids') || pName.includes('kid') ||
+            cName.includes('family') || cName.includes('kids') || cName.includes('kid')
+          ) {
+            belongsToFamilyOrKids = true;
+            break;
+          }
+        }
+      }
+
+      const isTournamentFamilyOrKids = !!(
+        tournament?.name?.toLowerCase().includes('family') ||
+        tournament?.name?.toLowerCase().includes('kids') ||
+        tournament?.name?.toLowerCase().includes('kid') ||
+        (tournament?.categories && Array.isArray(tournament.categories) && tournament.categories.some((cat: string) => 
+          cat.toLowerCase().includes('family') || cat.toLowerCase().includes('kids') || cat.toLowerCase().includes('kid')
+        ))
+      );
+
+      const isFamilyCategory = 
+        fixture.groupName?.toLowerCase().includes('family') || 
+        fixture.groupName?.toLowerCase().includes('kids') || 
+        belongsToFamilyOrKids ||
+        isTournamentFamilyOrKids;
+
+      // Win points delta
+      const t = fixture.matchType?.toLowerCase() || 'league';
+      let matchWinPoints = 5;
+      if (t.includes('pre_quarter') || t.includes('pre-quarter') || t.includes('pre quarter')) matchWinPoints = 5;
+      else if (t.includes('quarter') || t.includes('quater')) matchWinPoints = 10;
+      else if (t.includes('semi')) matchWinPoints = 15;
+      else if (t.includes('final')) matchWinPoints = 25;
+
+      const team1Parents = new Set<string>();
+      const team1Roots = new Set<string>();
+      team1PlayerIds.forEach(pId => {
+        const pLoc = allRootsPlayers.find(item => item.id === pId);
+        if (pLoc) {
+          if (pLoc.level1Name) team1Parents.add(pLoc.level1Name);
+          if (pLoc.rootName) team1Roots.add(pLoc.rootName);
+        }
+      });
+
+      const team2Parents = new Set<string>();
+      const team2Roots = new Set<string>();
+      team2PlayerIds.forEach(pId => {
+        const pLoc = allRootsPlayers.find(item => item.id === pId);
+        if (pLoc) {
+          if (pLoc.level1Name) team2Parents.add(pLoc.level1Name);
+          if (pLoc.rootName) team2Roots.add(pLoc.rootName);
+        }
+      });
+
+      // Update Parent Team stats
+      team1Parents.forEach(pName => {
+        if (!parentStatsMap[pName]) parentStatsMap[pName] = { wins: 0, losses: 0, points: 0 };
+        if (match.winner === 'player1') {
+          parentStatsMap[pName].wins++;
+          parentStatsMap[pName].points += isFamilyCategory ? 0 : matchWinPoints;
+        } else if (match.winner === 'player2') {
+          parentStatsMap[pName].losses++;
+        }
+      });
+
+      team2Parents.forEach(pName => {
+        if (!parentStatsMap[pName]) parentStatsMap[pName] = { wins: 0, losses: 0, points: 0 };
+        if (match.winner === 'player2') {
+          parentStatsMap[pName].wins++;
+          parentStatsMap[pName].points += isFamilyCategory ? 0 : matchWinPoints;
+        } else if (match.winner === 'player1') {
+          parentStatsMap[pName].losses++;
+        }
+      });
+
+      // Update Root stats
+      team1Roots.forEach(rName => {
+        if (!rootStatsMap[rName]) rootStatsMap[rName] = { wins: 0, losses: 0, points: 0 };
+        if (match.winner === 'player1') {
+          rootStatsMap[rName].wins++;
+          rootStatsMap[rName].points += isFamilyCategory ? 0 : matchWinPoints;
+        } else if (match.winner === 'player2') {
+          rootStatsMap[rName].losses++;
+        }
+      });
+
+      team2Roots.forEach(rName => {
+        if (!rootStatsMap[rName]) rootStatsMap[rName] = { wins: 0, losses: 0, points: 0 };
+        if (match.winner === 'player2') {
+          rootStatsMap[rName].wins++;
+          rootStatsMap[rName].points += isFamilyCategory ? 0 : matchWinPoints;
+        } else if (match.winner === 'player1') {
+          rootStatsMap[rName].losses++;
+        }
+      });
+    });
+
+    // Add female player bonus points (+5 points flat for 1st match played) to parent/root
+    const playersWithHierarchyBonus = new Set<string>();
+    fixtures.forEach(fixture => {
+      const isDoublesMatch = !!(fixture.isDoubles || fixture.player1aId || fixture.player1bId || fixture.player2aId || fixture.player2bId);
+      const team1PlayerIds: string[] = [];
+      const team2PlayerIds: string[] = [];
+      if (isDoublesMatch) {
+        if (fixture.player1aId) team1PlayerIds.push(fixture.player1aId);
+        if (fixture.player1bId) team1PlayerIds.push(fixture.player1bId);
+        if (fixture.player2aId) team2PlayerIds.push(fixture.player2aId);
+        if (fixture.player2bId) team2PlayerIds.push(fixture.player2bId);
+      } else {
+        if (fixture.player1Id) team1PlayerIds.push(fixture.player1Id);
+        if (fixture.player2Id) team2PlayerIds.push(fixture.player2Id);
+      }
+
+      let belongsToFamilyOrKids = false;
+      const allMatchPlayerIds = [...team1PlayerIds, ...team2PlayerIds];
+      for (const pId of allMatchPlayerIds) {
+        const p = allRootsPlayers.find(item => item.id === pId);
+        if (p) {
+          const rName = p.rootName?.toLowerCase() || '';
+          const pName = p.level1Name?.toLowerCase() || '';
+          const cName = p.level2Name?.toLowerCase() || '';
+          if (
+            rName.includes('family') || rName.includes('kids') || rName.includes('kid') ||
+            pName.includes('family') || pName.includes('kids') || pName.includes('kid') ||
+            cName.includes('family') || cName.includes('kids') || cName.includes('kid')
+          ) {
+            belongsToFamilyOrKids = true;
+            break;
+          }
+        }
+      }
+
+      const isTournamentFamilyOrKids = !!(
+        tournament?.name?.toLowerCase().includes('family') ||
+        tournament?.name?.toLowerCase().includes('kids') ||
+        tournament?.name?.toLowerCase().includes('kid') ||
+        (tournament?.categories && Array.isArray(tournament.categories) && tournament.categories.some((cat: string) => 
+          cat.toLowerCase().includes('family') || cat.toLowerCase().includes('kids') || cat.toLowerCase().includes('kid')
+        ))
+      );
+
+      const isFamilyCategory = 
+        fixture.groupName?.toLowerCase().includes('family') || 
+        fixture.groupName?.toLowerCase().includes('kids') || 
+        belongsToFamilyOrKids ||
+        isTournamentFamilyOrKids;
+
+      if (!isFamilyCategory) {
+        const allPlayerIds = [...team1PlayerIds, ...team2PlayerIds];
+        allPlayerIds.forEach(pId => {
+          const playedAny = matches.some(m => m.fixtureId === fixture.id);
+          if (playedAny && isPlayerFemale(pId, fixture.groupName) && !playersWithHierarchyBonus.has(pId)) {
+            playersWithHierarchyBonus.add(pId);
+            const pLoc = allRootsPlayers.find(item => item.id === pId);
+            if (pLoc) {
+              if (pLoc.level1Name) {
+                if (!parentStatsMap[pLoc.level1Name]) parentStatsMap[pLoc.level1Name] = { wins: 0, losses: 0, points: 0 };
+                parentStatsMap[pLoc.level1Name].points += 5;
+              }
+              if (pLoc.rootName) {
+                if (!rootStatsMap[pLoc.rootName]) rootStatsMap[pLoc.rootName] = { wins: 0, losses: 0, points: 0 };
+                rootStatsMap[pLoc.rootName].points += 5;
+              }
+            }
+          }
+        });
+      }
+    });
+
+    return { parentStatsMap, rootStatsMap };
+  }, [matches, fixtures, allRootsPlayers, roots, allRootsLevel1, tournament]);
+
+  const sortedParentTeams = useMemo(() => {
+    return Object.entries(hierarchyStats.parentStatsMap).map(([name, stats]) => {
+      const playerWithTeam = allRootsPlayers.find(p => p.level1Name === name);
+      const rootName = playerWithTeam ? playerWithTeam.rootName : 'Unknown';
+      return {
+        name,
+        rootName,
+        wins: (stats as any).wins || 0,
+        losses: (stats as any).losses || 0,
+        points: (stats as any).points || 0
+      };
+    }).sort((a, b) => {
+      if (b.points !== a.points) return b.points - a.points;
+      return b.wins - a.wins;
+    });
+  }, [hierarchyStats.parentStatsMap, allRootsPlayers]);
+
+  const sortedRoots = useMemo(() => {
+    return Object.entries(hierarchyStats.rootStatsMap).map(([name, stats]) => {
+      return {
+        name,
+        wins: (stats as any).wins || 0,
+        losses: (stats as any).losses || 0,
+        points: (stats as any).points || 0
+      };
+    }).sort((a, b) => {
+      if (b.points !== a.points) return b.points - a.points;
+      return b.wins - a.wins;
+    });
+  }, [hierarchyStats.rootStatsMap]);
+
+  const downloadPointsTablePDF = () => {
+    const doc = new jsPDF();
+    
+    // Header
+    doc.setFontSize(18);
+    doc.setFont("helvetica", "bold");
+    doc.text("Badminton Tournament Points Table & Standings", 14, 22);
+    
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Generated: ${new Date().toLocaleDateString()}`, 14, 28);
+    doc.text(`Tournament ID: ${tournamentId}`, 14, 34);
+    
+    // Draw horizontal line
+    doc.setDrawColor(200, 200, 200);
+    doc.line(14, 38, 196, 38);
+    
+    let y = 46;
+    
+    // Sort groups by getGroupOrderWeight
+    const sortedGroupsList = [...groups].sort((a, b) => {
+      const wA = getGroupOrderWeight(a.name);
+      const wB = getGroupOrderWeight(b.name);
+      if (wA !== wB) return wA - wB;
+      return a.name.localeCompare(b.name);
+    });
+    
+    sortedGroupsList.forEach((group) => {
+      const rankings = groupRankings[group.name] || [];
+      
+      if (y > 230) {
+        doc.addPage();
+        y = 20;
+      }
+      
+      doc.setFontSize(12);
+      doc.setFont("helvetica", "bold");
+      doc.text(group.name, 14, y);
+      
+      y += 4;
+      doc.setDrawColor(230, 230, 230);
+      doc.line(14, y, 196, y);
+      y += 6;
+      
+      if (rankings.length === 0) {
+        doc.setFontSize(10);
+        doc.setFont("helvetica", "italic");
+        doc.text("No standings recorded yet for this group", 20, y);
+        y += 10;
+      } else {
+        doc.setFontSize(9);
+        doc.setFont("helvetica", "bold");
+        doc.text("Pos", 14, y);
+        doc.text("Player/Team Name", 25, y);
+        doc.text("Pld", 85, y);
+        doc.text("W", 95, y);
+        doc.text("L", 105, y);
+        doc.text("GW", 115, y);
+        doc.text("GL", 125, y);
+        doc.text("GD", 135, y);
+        doc.text("PD", 145, y);
+        doc.text("Pts", 165, y);
+        
+        y += 3;
+        doc.line(14, y, 196, y);
+        y += 6;
+        
+        doc.setFont("helvetica", "normal");
+        rankings.forEach((p, idx) => {
+          if (y > 280) {
+            doc.addPage();
+            y = 20;
+            doc.setFont("helvetica", "bold");
+            doc.text(`${group.name} (Continued)`, 14, y);
+            y += 6;
+          }
+          
+          doc.text(String(idx + 1), 14, y);
+          
+          const nameStr = p.playerName || "N/A";
+          const truncatedName = nameStr.length > 28 ? nameStr.substring(0, 26) + ".." : nameStr;
+          doc.text(truncatedName, 25, y);
+          
+          doc.text(String(p.played), 85, y);
+          doc.text(String(p.wins), 95, y);
+          doc.text(String(p.losses), 105, y);
+          doc.text(String(p.gamesWon), 115, y);
+          doc.text(String(p.gamesLost), 125, y);
+          doc.text(String(p.gameDiff), 135, y);
+          doc.text(String(p.pointDiff), 145, y);
+          doc.text(String(p.matchPoints), 165, y);
+          
+          y += 7;
+        });
+        y += 5; // spacing after group table
+      }
+    });
+    
+    doc.save("points_table_standings.pdf");
+  };
+
   const generateShortId = () => Math.random().toString(36).substring(2, 6);
 
   // Helper to check if a set is finished (badminton professional rules)
@@ -247,7 +658,16 @@ export default function PointsTable({
 
   // Helper to retrieve the winner name/key of a knockout fixture
   const getFixtureWinner = (fixture: any) => {
-    if (!fixture || !fixture.scores) return null;
+    if (!fixture) return null;
+    if (fixture.isWalkover) {
+      if (fixture.walkoverWinner === 'player1') {
+        return { key: 'player1', name: fixture.player1Name, id: fixture.player1Id };
+      }
+      if (fixture.walkoverWinner === 'player2') {
+        return { key: 'player2', name: fixture.player2Name, id: fixture.player2Id };
+      }
+    }
+    if (!fixture.scores) return null;
     const s = fixture.scores;
     const target = Number(fixture.pointsTarget) || 21;
     
@@ -265,19 +685,6 @@ export default function PointsTable({
     if (p1Games > p2Games) return { key: 'player1', name: fixture.player1Name, id: fixture.player1Id };
     if (p2Games > p1Games) return { key: 'player2', name: fixture.player2Name, id: fixture.player2Id };
     return null;
-  };
-
-  const isPlayerFemale = (pId?: string, groupName?: string): boolean => {
-    if (!pId) return false;
-    const p = players.find(x => x.id === pId);
-    if (p?.gender === 'Female' || p?.gender?.toLowerCase() === 'female') {
-      return true;
-    }
-    const gLower = (groupName || '').toLowerCase();
-    if ((gLower.includes('women') || gLower.includes('female')) && !gLower.includes('mixed') && !gLower.includes('open')) {
-      return true;
-    }
-    return false;
   };
 
   // Calculate points grouped by groupName
@@ -1128,22 +1535,32 @@ export default function PointsTable({
 
               {/* Scores Column */}
               <div className="flex gap-1 shrink-0 items-center font-mono text-xs font-black">
-                <span className={`w-8 h-8 flex items-center justify-center rounded-lg ${
-                  isCompleted && s.p1g1 > s.p2g1 ? 'bg-amber-400 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'
-                }`}>
-                  {s.p1g1 || 0}
-                </span>
-                <span className={`w-8 h-8 flex items-center justify-center rounded-lg ${
-                  isCompleted && s.p1g2 > s.p2g2 ? 'bg-amber-400 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'
-                }`}>
-                  {s.p1g2 || 0}
-                </span>
-                {showG3 && (
-                  <span className={`w-8 h-8 flex items-center justify-center rounded-lg ${
-                    isCompleted && s.p1g3 > s.p2g3 ? 'bg-amber-400 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'
-                  }`}>
-                    {s.p1g3 || 0}
-                  </span>
+                {f.isWalkover ? (
+                  f.walkoverWinner === 'player1' ? (
+                    <span className="text-[10px] bg-amber-500/20 text-amber-400 font-extrabold px-2 py-1 rounded border border-amber-500/30">W.O. WIN</span>
+                  ) : (
+                    <span className="text-[10px] bg-slate-800 text-slate-400 font-semibold px-2 py-1 rounded border border-slate-700/50">L via W.O.</span>
+                  )
+                ) : (
+                  <>
+                    <span className={`w-8 h-8 flex items-center justify-center rounded-lg ${
+                      isCompleted && s.p1g1 > s.p2g1 ? 'bg-amber-400 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'
+                    }`}>
+                      {s.p1g1 || 0}
+                    </span>
+                    <span className={`w-8 h-8 flex items-center justify-center rounded-lg ${
+                      isCompleted && s.p1g2 > s.p2g2 ? 'bg-amber-400 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'
+                    }`}>
+                      {s.p1g2 || 0}
+                    </span>
+                    {showG3 && (
+                      <span className={`w-8 h-8 flex items-center justify-center rounded-lg ${
+                        isCompleted && s.p1g3 > s.p2g3 ? 'bg-amber-400 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'
+                      }`}>
+                        {s.p1g3 || 0}
+                      </span>
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -1179,22 +1596,32 @@ export default function PointsTable({
 
               {/* Scores Column */}
               <div className="flex gap-1 shrink-0 items-center font-mono text-xs font-black">
-                <span className={`w-8 h-8 flex items-center justify-center rounded-lg ${
-                  isCompleted && s.p2g1 > s.p1g1 ? 'bg-amber-400 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'
-                }`}>
-                  {s.p2g1 || 0}
-                </span>
-                <span className={`w-8 h-8 flex items-center justify-center rounded-lg ${
-                  isCompleted && s.p2g2 > s.p1g2 ? 'bg-amber-400 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'
-                }`}>
-                  {s.p2g2 || 0}
-                </span>
-                {showG3 && (
-                  <span className={`w-8 h-8 flex items-center justify-center rounded-lg ${
-                    isCompleted && s.p2g3 > s.p1g3 ? 'bg-amber-400 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'
-                  }`}>
-                    {s.p2g3 || 0}
-                  </span>
+                {f.isWalkover ? (
+                  f.walkoverWinner === 'player2' ? (
+                    <span className="text-[10px] bg-amber-500/20 text-amber-400 font-extrabold px-2 py-1 rounded border border-amber-500/30">W.O. WIN</span>
+                  ) : (
+                    <span className="text-[10px] bg-slate-800 text-slate-400 font-semibold px-2 py-1 rounded border border-slate-700/50">L via W.O.</span>
+                  )
+                ) : (
+                  <>
+                    <span className={`w-8 h-8 flex items-center justify-center rounded-lg ${
+                      isCompleted && s.p2g1 > s.p1g1 ? 'bg-amber-400 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'
+                    }`}>
+                      {s.p2g1 || 0}
+                    </span>
+                    <span className={`w-8 h-8 flex items-center justify-center rounded-lg ${
+                      isCompleted && s.p2g2 > s.p1g2 ? 'bg-amber-400 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'
+                    }`}>
+                      {s.p2g2 || 0}
+                    </span>
+                    {showG3 && (
+                      <span className={`w-8 h-8 flex items-center justify-center rounded-lg ${
+                        isCompleted && s.p2g3 > s.p1g3 ? 'bg-amber-400 text-slate-950 font-black' : 'bg-slate-800 text-slate-300'
+                      }`}>
+                        {s.p2g3 || 0}
+                      </span>
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -1257,22 +1684,32 @@ export default function PointsTable({
 
             {/* Scores Set 1, 2, 3 columns */}
             <div className="flex gap-1 shrink-0 items-center font-mono text-[11px] font-bold">
-              <span className={`w-7 h-7 flex items-center justify-center rounded-md ${
-                isCompleted && s.p1g1 > s.p2g1 ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' : 'bg-slate-50 text-slate-500'
-              }`}>
-                {s.p1g1 || 0}
-              </span>
-              <span className={`w-7 h-7 flex items-center justify-center rounded-md ${
-                isCompleted && s.p1g2 > s.p2g2 ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' : 'bg-slate-50 text-slate-500'
-              }`}>
-                {s.p1g2 || 0}
-              </span>
-              {showG3 && (
-                <span className={`w-7 h-7 flex items-center justify-center rounded-md ${
-                  isCompleted && s.p1g3 > s.p2g3 ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' : 'bg-slate-50 text-slate-500'
-                }`}>
-                  {s.p1g3 || 0}
-                </span>
+              {f.isWalkover ? (
+                f.walkoverWinner === 'player1' ? (
+                  <span className="text-[10px] bg-amber-100 text-amber-800 font-extrabold px-1.5 py-0.5 rounded border border-amber-200">W.O. WIN</span>
+                ) : (
+                  <span className="text-[10px] bg-slate-50 text-slate-400 font-semibold px-1.5 py-0.5 rounded border border-slate-150">L via W.O.</span>
+                )
+              ) : (
+                <>
+                  <span className={`w-7 h-7 flex items-center justify-center rounded-md ${
+                    isCompleted && s.p1g1 > s.p2g1 ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' : 'bg-slate-50 text-slate-500'
+                  }`}>
+                    {s.p1g1 || 0}
+                  </span>
+                  <span className={`w-7 h-7 flex items-center justify-center rounded-md ${
+                    isCompleted && s.p1g2 > s.p2g2 ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' : 'bg-slate-50 text-slate-500'
+                  }`}>
+                    {s.p1g2 || 0}
+                  </span>
+                  {showG3 && (
+                    <span className={`w-7 h-7 flex items-center justify-center rounded-md ${
+                      isCompleted && s.p1g3 > s.p2g3 ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' : 'bg-slate-50 text-slate-500'
+                    }`}>
+                      {s.p1g3 || 0}
+                    </span>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -1308,22 +1745,32 @@ export default function PointsTable({
 
             {/* Scores Set 1, 2, 3 columns */}
             <div className="flex gap-1 shrink-0 items-center font-mono text-[11px] font-bold">
-              <span className={`w-7 h-7 flex items-center justify-center rounded-md ${
-                isCompleted && s.p2g1 > s.p1g1 ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' : 'bg-slate-50 text-slate-500'
-              }`}>
-                {s.p2g1 || 0}
-              </span>
-              <span className={`w-7 h-7 flex items-center justify-center rounded-md ${
-                isCompleted && s.p2g2 > s.p1g2 ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' : 'bg-slate-50 text-slate-500'
-              }`}>
-                {s.p2g2 || 0}
-              </span>
-              {showG3 && (
-                <span className={`w-7 h-7 flex items-center justify-center rounded-md ${
-                  isCompleted && s.p2g3 > s.p1g3 ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' : 'bg-slate-50 text-slate-500'
-                }`}>
-                  {s.p2g3 || 0}
-                </span>
+              {f.isWalkover ? (
+                f.walkoverWinner === 'player2' ? (
+                  <span className="text-[10px] bg-amber-100 text-amber-800 font-extrabold px-1.5 py-0.5 rounded border border-amber-200">W.O. WIN</span>
+                ) : (
+                  <span className="text-[10px] bg-slate-50 text-slate-400 font-semibold px-1.5 py-0.5 rounded border border-slate-150">L via W.O.</span>
+                )
+              ) : (
+                <>
+                  <span className={`w-7 h-7 flex items-center justify-center rounded-md ${
+                    isCompleted && s.p2g1 > s.p1g1 ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' : 'bg-slate-50 text-slate-500'
+                  }`}>
+                    {s.p2g1 || 0}
+                  </span>
+                  <span className={`w-7 h-7 flex items-center justify-center rounded-md ${
+                    isCompleted && s.p2g2 > s.p1g2 ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' : 'bg-slate-50 text-slate-500'
+                  }`}>
+                    {s.p2g2 || 0}
+                  </span>
+                  {showG3 && (
+                    <span className={`w-7 h-7 flex items-center justify-center rounded-md ${
+                      isCompleted && s.p2g3 > s.p1g3 ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' : 'bg-slate-50 text-slate-500'
+                    }`}>
+                      {s.p2g3 || 0}
+                    </span>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -1584,8 +2031,16 @@ export default function PointsTable({
           </div>
         </div>
 
-        {/* Tab Buttons */}
-        <div className="flex bg-slate-100 p-1 rounded-2xl border border-slate-200">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={downloadPointsTablePDF}
+            className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 active:scale-98 text-white text-xs font-black rounded-xl transition shadow-xs cursor-pointer flex items-center gap-1.5"
+            title="Download PDF Standings"
+          >
+            Download PDF
+          </button>
+          {/* Tab Buttons */}
+          <div className="flex flex-wrap bg-slate-100 p-1 rounded-2xl border border-slate-200">
           <button
             onClick={() => setActiveTab('standings')}
             className={`px-4 py-2 text-xs font-extrabold rounded-xl transition ${
@@ -1625,6 +2080,7 @@ export default function PointsTable({
           )}
         </div>
       </div>
+    </div>
 
       <AnimatePresence mode="wait">
         {/* 1. STANDINGS TAB */}
@@ -1636,6 +2092,92 @@ export default function PointsTable({
             exit={{ opacity: 0, y: -15 }}
             className="space-y-8"
           >
+            {/* Real-time Team and Root Standings Overview */}
+            {sortedParentTeams.length > 0 && (
+              <div className="bg-slate-50/50 p-6 rounded-3xl border border-slate-200/60 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="font-extrabold text-sm text-slate-800 flex items-center gap-2">
+                      <Trophy className="w-5 h-5 text-indigo-600" />
+                      Team-wise Hierarchy Standings
+                    </h3>
+                    <p className="text-[10px] text-slate-500 font-medium">
+                      Real-time aggregated wins and points from all individual matches
+                    </p>
+                  </div>
+                  <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 px-3 py-1 rounded-full">
+                    Points: League (5) • QF (10) • SF (15) • Final (25)
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Parent Teams (Level 1) Card */}
+                  <div className="bg-white border border-slate-100 p-5 rounded-2xl shadow-sm space-y-3">
+                    <h4 className="font-black text-xs text-indigo-700 bg-indigo-50/50 px-3 py-1 rounded-md inline-block">
+                      Parent Teams Standings (Level 1)
+                    </h4>
+                    <div className="overflow-x-auto rounded-xl border border-slate-100">
+                      <table className="w-full text-left text-[11px] border-collapse">
+                        <thead>
+                          <tr className="bg-slate-50 border-b border-slate-100 text-slate-500 font-bold">
+                            <th className="p-2 w-10 text-center">Rank</th>
+                            <th className="p-2">Team Name</th>
+                            <th className="p-2">Root Group</th>
+                            <th className="p-2 text-center text-emerald-600">Wins</th>
+                            <th className="p-2 text-center text-rose-500">Losses</th>
+                            <th className="p-2 text-center bg-indigo-50/30 text-indigo-600 font-black">Points</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {sortedParentTeams.map((pt, idx) => (
+                            <tr key={pt.name} className="hover:bg-slate-50/50 transition">
+                              <td className="p-2 text-center font-bold text-slate-400">#{idx + 1}</td>
+                              <td className="p-2 font-extrabold text-slate-800">{pt.name}</td>
+                              <td className="p-2 text-slate-500 font-semibold">{pt.rootName}</td>
+                              <td className="p-2 text-center font-bold text-emerald-600">{pt.wins}</td>
+                              <td className="p-2 text-center font-bold text-rose-500">{pt.losses}</td>
+                              <td className="p-2 text-center font-black text-indigo-600 bg-indigo-50/20">{pt.points} Pts</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Roots Standings Card */}
+                  <div className="bg-white border border-slate-100 p-5 rounded-2xl shadow-sm space-y-3">
+                    <h4 className="font-black text-xs text-amber-700 bg-amber-50/50 px-3 py-1 rounded-md inline-block">
+                      Root Bases Standings
+                    </h4>
+                    <div className="overflow-x-auto rounded-xl border border-slate-100">
+                      <table className="w-full text-left text-[11px] border-collapse">
+                        <thead>
+                          <tr className="bg-slate-50 border-b border-slate-100 text-slate-500 font-bold">
+                            <th className="p-2 w-10 text-center">Rank</th>
+                            <th className="p-2">Root Name</th>
+                            <th className="p-2 text-center text-emerald-600">Wins</th>
+                            <th className="p-2 text-center text-rose-500">Losses</th>
+                            <th className="p-2 text-center bg-amber-50/30 text-amber-700 font-black">Points</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {sortedRoots.map((rt, idx) => (
+                            <tr key={rt.name} className="hover:bg-slate-50/50 transition">
+                              <td className="p-2 text-center font-bold text-slate-400">#{idx + 1}</td>
+                              <td className="p-2 font-extrabold text-slate-800">{rt.name}</td>
+                              <td className="p-2 text-center font-bold text-emerald-600">{rt.wins}</td>
+                              <td className="p-2 text-center font-bold text-rose-500">{rt.losses}</td>
+                              <td className="p-2 text-center font-black text-amber-700 bg-amber-50/20">{rt.points} Pts</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {Object.keys(groupRankings).length === 0 ? (
               <div className="bg-white border border-slate-100 p-10 rounded-3xl text-center shadow-sm">
                 <Users className="w-12 h-12 text-slate-300 mx-auto mb-4" />
@@ -1643,7 +2185,12 @@ export default function PointsTable({
                 <p className="text-slate-500 text-sm mt-1">Please create groups and complete matches to view standings.</p>
               </div>
             ) : (
-              Object.entries(groupRankings).sort((a, b) => a[0].localeCompare(b[0])).map(([groupName, sortedPlayers]) => (
+              Object.entries(groupRankings).sort((a, b) => {
+                const wA = getGroupOrderWeight(a[0]);
+                const wB = getGroupOrderWeight(b[0]);
+                if (wA !== wB) return wA - wB;
+                return a[0].localeCompare(b[0]);
+              }).map(([groupName, sortedPlayers]) => (
                 <div key={groupName} className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden p-6 space-y-4">
                   <div className="flex items-center justify-between">
                     <h3 className="font-black text-base text-indigo-700 bg-indigo-50 border border-indigo-100 px-4 py-1.5 rounded-full inline-block">
@@ -1664,6 +2211,8 @@ export default function PointsTable({
                           <th className="p-3 text-center text-emerald-600 font-bold whitespace-nowrap">W</th>
                           <th className="p-3 text-center text-rose-600 font-bold whitespace-nowrap">L</th>
                           <th className="p-3 text-center text-indigo-600 font-extrabold whitespace-nowrap">Points</th>
+                          <th className="p-3 text-center text-indigo-500 font-bold whitespace-nowrap">Parent Team Wins</th>
+                          <th className="p-3 text-center text-amber-600 font-bold whitespace-nowrap">Root Wins</th>
                           <th className="p-3 text-center font-semibold whitespace-nowrap">Sets Won</th>
                           <th className="p-3 text-center font-semibold whitespace-nowrap">Sets Lost</th>
                           <th className="p-3 text-center whitespace-nowrap">Set Diff</th>
@@ -1747,9 +2296,51 @@ export default function PointsTable({
                               <td className="p-3 text-center font-bold text-emerald-600 whitespace-nowrap">{p.wins}</td>
                               <td className="p-3 text-center font-bold text-rose-600 whitespace-nowrap">{p.losses}</td>
 
-                              {/* Total Standing Points */}
+                               {/* Total Standing Points */}
                               <td className="p-3 text-center font-black text-sm text-indigo-600 whitespace-nowrap">
                                 {p.matchPoints}
+                              </td>
+
+                              {/* Parent Team Wins */}
+                              <td className="p-3 text-center whitespace-nowrap">
+                                {(() => {
+                                  const pL1 = playerL1Map[p.playerId] || (p.partnerId && playerL1Map[p.partnerId]);
+                                  if (pL1) {
+                                    const stat = hierarchyStats.parentStatsMap[pL1];
+                                    return (
+                                      <div className="flex flex-col items-center justify-center">
+                                        <span className="font-extrabold text-indigo-600 bg-indigo-50/80 border border-indigo-100 px-2 py-0.5 rounded-full text-[10px]">
+                                          {stat ? `${stat.wins}W - ${stat.losses}L` : '0W - 0L'}
+                                        </span>
+                                        <span className="text-[8px] text-slate-400 mt-0.5 font-bold uppercase truncate max-w-[100px]" title={pL1}>
+                                          {pL1}
+                                        </span>
+                                      </div>
+                                    );
+                                  }
+                                  return <span className="text-slate-300">-</span>;
+                                })()}
+                              </td>
+
+                              {/* Root Wins */}
+                              <td className="p-3 text-center whitespace-nowrap">
+                                {(() => {
+                                  const pRoot = playerRootMap[p.playerId] || (p.partnerId && playerRootMap[p.partnerId]);
+                                  if (pRoot) {
+                                    const stat = hierarchyStats.rootStatsMap[pRoot];
+                                    return (
+                                      <div className="flex flex-col items-center justify-center">
+                                        <span className="font-extrabold text-amber-600 bg-amber-50/80 border border-amber-100 px-2 py-0.5 rounded-full text-[10px]">
+                                          {stat ? `${stat.wins}W - ${stat.losses}L` : '0W - 0L'}
+                                        </span>
+                                        <span className="text-[8px] text-slate-400 mt-0.5 font-bold uppercase truncate max-w-[100px]" title={pRoot}>
+                                          {pRoot}
+                                        </span>
+                                      </div>
+                                    );
+                                  }
+                                  return <span className="text-slate-300">-</span>;
+                                })()}
                               </td>
 
                               {/* Sets Won / Lost */}

@@ -12,6 +12,7 @@ const PREDEFINED_CATEGORIES = [
   "Badminton - Doubles - Mens Doubles - Open Category",
   "Badminton - Doubles - Mens Doubles - 35 Plus",
   "Badminton - Doubles - Mens Doubles - 45 Plus",
+  "Badminton - Doubles - Mens Doubles - 55 Plus",
   "Badminton - Doubles - Womens Doubles - Open Category",
   "Badminton - Doubles - Womens Doubles - 35 Plus",
   "Badminton - Doubles - Mixed Doubles - Open Category",
@@ -24,12 +25,28 @@ const PREDEFINED_CATEGORIES = [
 export default function CategoryManager({ 
   tournamentId, 
   onNext,
-  userRole = 'user'
+  userRole = 'user',
+  selectedGame = 'badminton'
 }: { 
   tournamentId: string; 
   onNext: () => void;
   userRole?: 'admin' | 'scorer' | 'user';
+  selectedGame?: 'badminton' | 'pickleball' | 'table_tennis';
 }) {
+  const getGameTitle = (game: string) => {
+    if (game === 'table_tennis') return 'Table Tennis';
+    if (game === 'pickleball') return 'Pickleball';
+    return 'Badminton';
+  };
+
+  const gameName = getGameTitle(selectedGame);
+
+  const getPredefinedCategories = () => {
+    return PREDEFINED_CATEGORIES.map(cat => cat.replace('Badminton', gameName));
+  };
+
+  const predefinedList = getPredefinedCategories();
+
   const [categories, setCategories] = useState<any[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
 
@@ -85,7 +102,7 @@ export default function CategoryManager({
       {isAdmin && (
         <>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-            {PREDEFINED_CATEGORIES.map(cat => (
+            {predefinedList.map(cat => (
               <button 
                 key={cat}
                 onClick={() => toggleCategory(cat)}

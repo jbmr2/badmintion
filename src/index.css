@@ -7,6 +7,173 @@
 
 @layer base {
   body {
-    @apply bg-slate-50 text-slate-900;
+    @apply bg-slate-50 text-slate-900 transition-colors duration-200;
   }
 }
+
+/* Dark theme overrides */
+.dark body {
+  background-color: #0b0f19 !important; /* Elegant midnight black */
+  color: #f8fafc !important;
+}
+
+/* Base background overrides */
+.dark .bg-white {
+  background-color: #1e293b !important; /* Slate 800 */
+}
+
+.dark .bg-slate-50, 
+.dark .bg-gray-50,
+.dark .bg-slate-100,
+.dark .bg-gray-100 {
+  background-color: #0f172a !important; /* Slate 900 */
+}
+
+.dark .bg-slate-200,
+.dark .bg-slate-200\/60,
+.dark .bg-slate-200\/50,
+.dark .bg-gray-200 {
+  background-color: #334155 !important; /* Slate 700 */
+}
+
+/* Base text overrides */
+.dark .text-slate-950,
+.dark .text-slate-900,
+.dark .text-slate-800,
+.dark .text-slate-700,
+.dark .text-gray-900,
+.dark .text-gray-800,
+.dark .text-gray-700 {
+  color: #f8fafc !important; /* Slate 50 */
+}
+
+.dark .text-slate-600,
+.dark .text-slate-500,
+.dark .text-slate-400,
+.dark .text-gray-600,
+.dark .text-gray-500,
+.dark .text-gray-400 {
+  color: #94a3b8 !important; /* Slate 400 */
+}
+
+/* Border overrides */
+.dark .border-slate-100,
+.dark .border-slate-150,
+.dark .border-slate-200,
+.dark .border-slate-300,
+.dark .border-slate-150\/80,
+.dark .border-slate-200\/80,
+.dark .border-slate-200\/60,
+.dark .border-slate-300\/50,
+.dark .border-gray-100,
+.dark .border-gray-200 {
+  border-color: #334155 !important; /* Slate 700 */
+}
+
+/* Input elements inside dark mode */
+.dark input, 
+.dark select, 
+.dark textarea {
+  background-color: #0f172a !important;
+  color: #f8fafc !important;
+  border-color: #334155 !important;
+}
+
+.dark input::placeholder, 
+.dark textarea::placeholder {
+  color: #64748b !important;
+}
+
+/* Sub-containers & Tabs hover states */
+.dark .hover\:bg-slate-50:hover,
+.dark .hover\:bg-slate-100:hover,
+.dark .hover\:bg-gray-50:hover,
+.dark .hover\:bg-gray-100:hover {
+  background-color: #334155 !important;
+}
+
+/* Table rows */
+.dark tr:hover {
+  background-color: rgba(51, 65, 85, 0.3) !important;
+}
+
+/* Active tab backgrounds */
+.dark .bg-slate-900 {
+  background-color: #f8fafc !important;
+  color: #0f172a !important;
+}
+
+.dark .bg-slate-900 .text-white {
+  color: #0f172a !important;
+}
+
+/* Color badges styling */
+/* Indigo */
+.dark .bg-indigo-50 {
+  background-color: #1e1b4b !important; /* indigo 950 */
+  color: #c7d2fe !important; /* indigo 200 */
+  border-color: #312e81 !important; /* indigo 900 */
+}
+.dark .text-indigo-700, .dark .text-indigo-600 {
+  color: #a5b4fc !important; /* indigo 300 */
+}
+
+/* Emerald */
+.dark .bg-emerald-50 {
+  background-color: #064e3b !important; /* emerald 950 */
+  color: #a7f3d0 !important; /* emerald 200 */
+  border-color: #065f46 !important; /* emerald 900 */
+}
+.dark .text-emerald-700, .dark .text-emerald-800, .dark .text-emerald-600 {
+  color: #6ee7b7 !important; /* emerald 300 */
+}
+
+/* Rose */
+.dark .bg-rose-50 {
+  background-color: #4c0519 !important; /* rose 950 */
+  color: #fecdd3 !important; /* rose 200 */
+  border-color: #881337 !important; /* rose 900 */
+}
+.dark .text-rose-700, .dark .text-rose-800, .dark .text-rose-600 {
+  color: #fda4af !important; /* rose 300 */
+}
+
+/* Amber */
+.dark .bg-amber-50 {
+  background-color: #451a03 !important; /* amber 950 */
+  color: #fde68a !important; /* amber 200 */
+  border-color: #78350f !important; /* amber 900 */
+}
+.dark .text-amber-700, .dark .text-amber-800, .dark .text-amber-600 {
+  color: #fcd34d !important; /* amber 300 */
+}
+
+/* Blue */
+.dark .bg-blue-50 {
+  background-color: #172554 !important; /* blue 950 */
+  color: #bfdbfe !important; /* blue 200 */
+  border-color: #1e3a8a !important; /* blue 900 */
+}
+.dark .text-blue-700, .dark .text-blue-800, .dark .text-blue-600 {
+  color: #93c5fd !important; /* blue 300 */
+}
+
+/* Custom modals/dialogs that use explicit overlay */
+.dark .bg-slate-900\/60 {
+  background-color: rgba(15, 23, 42, 0.8) !important;
+}
+
+/* Standard button outlines */
+.dark .border-indigo-150 {
+  border-color: #312e81 !important;
+}
+.dark .border-emerald-200 {
+  border-color: #065f46 !important;
+}
+.dark .border-amber-200 {
+  border-color: #78350f !important;
+}
+.dark .border-rose-200 {
+  border-color: #881337 !important;
+}
+

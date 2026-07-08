@@ -13,6 +13,8 @@ interface Fixture {
   groupName?: string;
   matchType?: string;
   court?: string;
+  isWalkover?: boolean;
+  walkoverWinner?: string;
   scores?: {
     p1g1: number;
     p2g1: number;
@@ -64,6 +66,7 @@ export default function RecentMatches({ tournamentId }: { tournamentId: string }
 
   // Helper to determine the winner of a completed fixture
   const getWinner = (f: Fixture) => {
+    if (f.isWalkover) return f.walkoverWinner as 'player1' | 'player2';
     if (!f.scores) return null;
     const s = f.scores;
     const p1Sets = (s.p1g1 > s.p2g1 ? 1 : 0) + (s.p1g2 > s.p2g2 ? 1 : 0) + (s.p1g3 > s.p2g3 ? 1 : 0);
@@ -158,20 +161,28 @@ export default function RecentMatches({ tournamentId }: { tournamentId: string }
                     </div>
                     {/* Game Scores for Player 1 */}
                     <div className="flex items-center gap-1.5 font-mono text-xs pl-2 shrink-0">
-                      {f.scores && (
-                        <>
-                          <span className={`px-1.5 py-0.5 rounded ${f.scores.p1g1 > f.scores.p2g1 ? 'bg-indigo-100/70 font-black text-indigo-700' : 'text-slate-400'}`}>
-                            {f.scores.p1g1}
-                          </span>
-                          <span className={`px-1.5 py-0.5 rounded ${f.scores.p1g2 > f.scores.p2g2 ? 'bg-indigo-100/70 font-black text-indigo-700' : 'text-slate-400'}`}>
-                            {f.scores.p1g2}
-                          </span>
-                          {(f.scores.p1g3 > 0 || f.scores.p2g3 > 0) && (
-                            <span className={`px-1.5 py-0.5 rounded ${f.scores.p1g3 > f.scores.p2g3 ? 'bg-indigo-100/70 font-black text-indigo-700' : 'text-slate-400'}`}>
-                              {f.scores.p1g3}
+                      {f.isWalkover ? (
+                        f.walkoverWinner === 'player1' ? (
+                          <span className="text-[10px] bg-amber-100 text-amber-800 font-extrabold px-1.5 py-0.5 rounded border border-amber-200 shrink-0">W.O. WIN</span>
+                        ) : (
+                          <span className="text-[10px] bg-slate-50 text-slate-400 font-semibold px-1.5 py-0.5 rounded border border-slate-150 shrink-0">L via W.O.</span>
+                        )
+                      ) : (
+                        f.scores && (
+                          <>
+                            <span className={`px-1.5 py-0.5 rounded ${f.scores.p1g1 > f.scores.p2g1 ? 'bg-indigo-100/70 font-black text-indigo-700' : 'text-slate-400'}`}>
+                              {f.scores.p1g1}
                             </span>
-                          )}
-                        </>
+                            <span className={`px-1.5 py-0.5 rounded ${f.scores.p1g2 > f.scores.p2g2 ? 'bg-indigo-100/70 font-black text-indigo-700' : 'text-slate-400'}`}>
+                              {f.scores.p1g2}
+                            </span>
+                            {(f.scores.p1g3 > 0 || f.scores.p2g3 > 0) && (
+                              <span className={`px-1.5 py-0.5 rounded ${f.scores.p1g3 > f.scores.p2g3 ? 'bg-indigo-100/70 font-black text-indigo-700' : 'text-slate-400'}`}>
+                                {f.scores.p1g3}
+                              </span>
+                            )}
+                          </>
+                        )
                       )}
                     </div>
                   </div>
@@ -186,20 +197,28 @@ export default function RecentMatches({ tournamentId }: { tournamentId: string }
                     </div>
                     {/* Game Scores for Player 2 */}
                     <div className="flex items-center gap-1.5 font-mono text-xs pl-2 shrink-0">
-                      {f.scores && (
-                        <>
-                          <span className={`px-1.5 py-0.5 rounded ${f.scores.p2g1 > f.scores.p1g1 ? 'bg-indigo-100/70 font-black text-indigo-700' : 'text-slate-400'}`}>
-                            {f.scores.p2g1}
-                          </span>
-                          <span className={`px-1.5 py-0.5 rounded ${f.scores.p2g2 > f.scores.p1g2 ? 'bg-indigo-100/70 font-black text-indigo-700' : 'text-slate-400'}`}>
-                            {f.scores.p2g2}
-                          </span>
-                          {(f.scores.p1g3 > 0 || f.scores.p2g3 > 0) && (
-                            <span className={`px-1.5 py-0.5 rounded ${f.scores.p2g3 > f.scores.p1g3 ? 'bg-indigo-100/70 font-black text-indigo-700' : 'text-slate-400'}`}>
-                              {f.scores.p2g3}
+                      {f.isWalkover ? (
+                        f.walkoverWinner === 'player2' ? (
+                          <span className="text-[10px] bg-amber-100 text-amber-800 font-extrabold px-1.5 py-0.5 rounded border border-amber-200 shrink-0">W.O. WIN</span>
+                        ) : (
+                          <span className="text-[10px] bg-slate-50 text-slate-400 font-semibold px-1.5 py-0.5 rounded border border-slate-150 shrink-0">L via W.O.</span>
+                        )
+                      ) : (
+                        f.scores && (
+                          <>
+                            <span className={`px-1.5 py-0.5 rounded ${f.scores.p2g1 > f.scores.p1g1 ? 'bg-indigo-100/70 font-black text-indigo-700' : 'text-slate-400'}`}>
+                              {f.scores.p2g1}
                             </span>
-                          )}
-                        </>
+                            <span className={`px-1.5 py-0.5 rounded ${f.scores.p2g2 > f.scores.p1g2 ? 'bg-indigo-100/70 font-black text-indigo-700' : 'text-slate-400'}`}>
+                              {f.scores.p2g2}
+                            </span>
+                            {(f.scores.p1g3 > 0 || f.scores.p2g3 > 0) && (
+                              <span className={`px-1.5 py-0.5 rounded ${f.scores.p2g3 > f.scores.p1g3 ? 'bg-indigo-100/70 font-black text-indigo-700' : 'text-slate-400'}`}>
+                                {f.scores.p2g3}
+                              </span>
+                            )}
+                          </>
+                        )
                       )}
                     </div>
                   </div>

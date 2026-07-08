@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { jsPDF } from 'jspdf';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -33,7 +34,8 @@ import {
   Filter,
   RefreshCw,
   Award,
-  Loader2
+  Loader2,
+  FileText
 } from 'lucide-react';
 
 export default function FixtureManager({ 
@@ -46,6 +48,7 @@ export default function FixtureManager({
   userRole?: 'admin' | 'scorer' | 'user';
 }) {
   const isAdmin = userRole === 'admin';
+  const canScore = userRole === 'admin' || userRole === 'scorer';
   const [fixtures, setFixtures] = useState<any[]>([]);
   const [deletingIds, setDeletingIds] = useState<string[]>([]);
   const [players, setPlayers] = useState<any[]>([]);
@@ -61,6 +64,20 @@ export default function FixtureManager({
   const [matchType, setMatchType] = useState<'league' | 'pre_quarter' | 'quarter' | 'semi' | 'final'>('league');
   const [groups, setGroups] = useState<any[]>([]);
   const [editingFixture, setEditingFixture] = useState<any | null>(null);
+  const [matchNumber, setMatchNumber] = useState('');
+  const [matches, setMatches] = useState<any[]>([]);
+
+  // Score Entry Modal States
+  const [scoringFixture, setScoringFixture] = useState<any | null>(null);
+  const [scP1g1, setScP1g1] = useState('0');
+  const [scP2g1, setScP2g1] = useState('0');
+  const [scP1g2, setScP1g2] = useState('0');
+  const [scP2g2, setScP2g2] = useState('0');
+  const [scP1g3, setScP1g3] = useState('0');
+  const [scP2g3, setScP2g3] = useState('0');
+  const [scoringStatus, setScoringStatus] = useState<'pending' | 'live' | 'completed'>('completed');
+  const [isWalkover, setIsWalkover] = useState(false);
+  const [walkoverWinner, setWalkoverWinner] = useState<'player1' | 'player2'>('player1');
 
   useEffect(() => {
     if (manualGroup) {
@@ -86,6 +103,9 @@ export default function FixtureManager({
   const [allRootsLevel1, setAllRootsLevel1] = useState<any[]>([]);
   const [allRootsLevel2, setAllRootsLevel2] = useState<any[]>([]);
   const [allRootsPlayers, setAllRootsPlayers] = useState<any[]>([]);
+
+  const isStructureMaster = tournamentId !== '_master_' && (roots.length === 0 || roots.some(r => r.isMasterFallback));
+  const structureTournamentId = isStructureMaster ? '_master_' : tournamentId;
 
   // Filter & Search states
   const [searchQuery, setSearchQuery] = useState('');
@@ -151,11 +171,18 @@ export default function FixtureManager({
       (error) => console.error("Error fetching tournament courts:", error)
     );
 
+    const qMatches = query(collection(db, `tournaments/${tournamentId}/matches`));
+    const unsubscribeMatches = onSnapshot(qMatches,
+      (snapshot) => setMatches(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))),
+      (error) => handleFirestoreError(error, OperationType.LIST, `tournaments/${tournamentId}/matches`)
+    );
+
     return () => {
       unsubscribeFixtures();
       unsubscribePlayers();
       unsubscribeGroups();
       unsubscribeTournament();
+      unsubscribeMatches();
     };
   }, [tournamentId]);
 
@@ -164,18 +191,26 @@ export default function FixtureManager({
     if (!tournamentId) return;
     const qRoots = query(collection(db, `tournaments/${tournamentId}/roots`));
     const unsubscribeRoots = onSnapshot(qRoots, (snapshot) => {
-      setRoots(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+      if (snapshot.empty && tournamentId !== '_master_') {
+        const qMasterRoots = query(collection(db, `tournaments/_master_/roots`));
+        const unsubscribeMasterRoots = onSnapshot(qMasterRoots, (masterSnap) => {
+          setRoots(masterSnap.docs.map(d => ({ id: d.id, isMasterFallback: true, ...d.data() })));
+        }, (e) => console.error("Error fetching master roots in FixtureManager:", e));
+        return () => unsubscribeMasterRoots();
+      } else {
+        setRoots(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+      }
     }, (e) => console.error("Error fetching roots in FixtureManager:", e));
     return () => unsubscribeRoots();
   }, [tournamentId]);
 
   useEffect(() => {
-    if (roots.length === 0 || !tournamentId) {
+    if (roots.length === 0 || !structureTournamentId) {
       setAllRootsLevel1([]);
       return;
     }
     const unsubscribes = roots.map(root => {
-      const q = query(collection(db, `tournaments/${tournamentId}/roots/${root.id}/level1`));
+      const q = query(collection(db, `tournaments/${structureTournamentId}/roots/${root.id}/level1`));
       return onSnapshot(q, (snapshot) => {
         setAllRootsLevel1(prev => {
           const filtered = prev.filter(item => item.rootId !== root.id);
@@ -185,15 +220,15 @@ export default function FixtureManager({
       }, (err) => console.error("Error fetching level1s in FixtureManager:", err));
     });
     return () => unsubscribes.forEach(unsub => unsub());
-  }, [roots, tournamentId]);
+  }, [roots, structureTournamentId]);
 
   useEffect(() => {
-    if (allRootsLevel1.length === 0 || !tournamentId) {
+    if (allRootsLevel1.length === 0 || !structureTournamentId) {
       setAllRootsLevel2([]);
       return;
     }
     const unsubscribes = allRootsLevel1.map(l1 => {
-      const q = query(collection(db, `tournaments/${tournamentId}/roots/${l1.rootId}/level1/${l1.id}/level2`));
+      const q = query(collection(db, `tournaments/${structureTournamentId}/roots/${l1.rootId}/level1/${l1.id}/level2`));
       return onSnapshot(q, (snapshot) => {
         setAllRootsLevel2(prev => {
           const filtered = prev.filter(item => item.level1Id !== l1.id);
@@ -210,7 +245,7 @@ export default function FixtureManager({
       }, (err) => console.error("Error fetching level2s in FixtureManager:", err));
     });
     return () => unsubscribes.forEach(unsub => unsub());
-  }, [allRootsLevel1, tournamentId]);
+  }, [allRootsLevel1, structureTournamentId]);
 
   useEffect(() => {
     if (allRootsLevel2.length === 0 || !tournamentId) {
@@ -267,7 +302,8 @@ export default function FixtureManager({
         pointsTarget: pointsTarget,
         status: 'pending',
         court: manualCourt,
-        isDoubles: isDoubles
+        isDoubles: isDoubles,
+        matchNumber: matchNumber || String(fixtures.length + 1)
       };
       
       if (isDoubles) {
@@ -295,6 +331,7 @@ export default function FixtureManager({
       setManualGroup('');
       setMatchType('league');
       setManualCourt('');
+      setMatchNumber('');
     } catch (e) {
       console.error("Error creating manual match:", e);
     } finally {
@@ -317,6 +354,7 @@ export default function FixtureManager({
   };
 
   const adjustTeamPoints = async (winnerPlayerId: string, delta: number, fixture?: any) => {
+    if (!winnerPlayerId) return;
     if (
       fixture?.groupName?.toLowerCase().includes('family') ||
       fixture?.groupName?.toLowerCase().includes('kids')
@@ -387,6 +425,7 @@ export default function FixtureManager({
     setManualGroup(fixture.groupName);
     setMatchType(fixture.matchType || 'league');
     setManualCourt(fixture.court || '');
+    setMatchNumber(fixture.matchNumber || '');
     setIsDoubles(!!fixture.isDoubles);
     if (fixture.isDoubles) {
       setManualPlayer1a(fixture.player1aId || '');
@@ -416,6 +455,7 @@ export default function FixtureManager({
     setManualGroup('');
     setMatchType('league');
     setManualCourt('');
+    setMatchNumber('');
   };
 
   const handleUpdate = async () => {
@@ -427,7 +467,8 @@ export default function FixtureManager({
         groupName: manualGroup,
         matchType: matchType,
         court: manualCourt,
-        isDoubles: isDoubles
+        isDoubles: isDoubles,
+        matchNumber: matchNumber
       };
 
       if (isDoubles) {
@@ -471,6 +512,7 @@ export default function FixtureManager({
       setManualGroup('');
       setMatchType('league');
       setManualCourt('');
+      setMatchNumber('');
     } catch (e) {
       console.error("Error updating manual match:", e);
     } finally {
@@ -485,6 +527,7 @@ export default function FixtureManager({
       setIsGenerating(true);
       const batch = writeBatch(db);
       const fixturesCol = collection(db, `tournaments/${tournamentId}/fixtures`);
+      let matchCounter = fixtures.length + 1;
 
       if (isDoubles) {
         // Group players into pairs/teams
@@ -547,6 +590,7 @@ export default function FixtureManager({
               pointsTarget: pointsTarget,
               status: 'pending',
               matchId: generateShortId(),
+              matchNumber: String(matchCounter++),
               court: '',
               isDoubles: true,
               player1aId: team1.playerA.id,
@@ -572,6 +616,7 @@ export default function FixtureManager({
               pointsTarget: pointsTarget,
               status: 'pending',
               matchId: generateShortId(),
+              matchNumber: String(matchCounter++),
               court: '',
               isDoubles: false,
               player1Id: filteredPlayers[i].id,
@@ -588,6 +633,122 @@ export default function FixtureManager({
       setManualGroup('');
     } catch (e) {
       console.error("Error generating league matches:", e);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const openScoringModal = (fixture: any) => {
+    setScoringFixture(fixture);
+    setScP1g1(String(fixture.scores?.p1g1 || 0));
+    setScP2g1(String(fixture.scores?.p2g1 || 0));
+    setScP1g2(String(fixture.scores?.p1g2 || 0));
+    setScP2g2(String(fixture.scores?.p2g2 || 0));
+    setScP1g3(String(fixture.scores?.p1g3 || 0));
+    setScP2g3(String(fixture.scores?.p2g3 || 0));
+    setScoringStatus(fixture.status || 'completed');
+    setIsWalkover(!!fixture.isWalkover);
+    setWalkoverWinner(fixture.walkoverWinner || 'player1');
+  };
+
+  const handleSaveScores = async () => {
+    if (!scoringFixture) return;
+    try {
+      setIsGenerating(true);
+      const fixtureId = scoringFixture.id;
+      const target = Number(scoringFixture.pointsTarget) || (scoringFixture.matchType === 'league' ? 15 : 21);
+
+      let s = {
+        p1g1: Number(scP1g1) || 0,
+        p2g1: Number(scP2g1) || 0,
+        p1g2: Number(scP1g2) || 0,
+        p2g2: Number(scP2g2) || 0,
+        p1g3: Number(scP1g3) || 0,
+        p2g3: Number(scP2g3) || 0,
+      };
+
+      if (isWalkover) {
+        s = walkoverWinner === 'player1'
+          ? { p1g1: target, p2g1: 0, p1g2: target, p2g2: 0, p1g3: 0, p2g3: 0 }
+          : { p1g1: 0, p2g1: target, p1g2: 0, p2g2: target, p1g3: 0, p2g3: 0 };
+      }
+
+      const p1Games = (s.p1g1 > s.p2g1 ? 1 : 0) + (s.p1g2 > s.p2g2 ? 1 : 0) + (s.p1g3 > s.p2g3 ? 1 : 0);
+      const p2Games = (s.p2g1 > s.p1g1 ? 1 : 0) + (s.p2g2 > s.p1g2 ? 1 : 0) + (s.p2g3 > s.p1g3 ? 1 : 0);
+      const computedWinner = p1Games > p2Games ? 'player1' : 'player2';
+
+      const isDoublesMatch = !!(scoringFixture.isDoubles || scoringFixture.player1aId || scoringFixture.player1bId || scoringFixture.player2aId || scoringFixture.player2bId);
+      const winnerPlayerId = computedWinner === 'player1'
+        ? (isDoublesMatch ? scoringFixture.player1aId : scoringFixture.player1Id)
+        : (isDoublesMatch ? scoringFixture.player2aId : scoringFixture.player2Id);
+
+      const existingMatch = matches.find(m => m.fixtureId === fixtureId);
+      const pointsDelta = getPointsDelta(scoringFixture);
+
+      // Handle standings adjustment if transitioning to completed
+      if (scoringStatus === 'completed') {
+        if (existingMatch) {
+          const oldWinner = existingMatch.winner;
+          const oldWinnerPlayerId = oldWinner === 'player1'
+            ? (isDoublesMatch ? scoringFixture.player1aId : scoringFixture.player1Id)
+            : (isDoublesMatch ? scoringFixture.player2aId : scoringFixture.player2Id);
+
+          await updateDoc(doc(db, `tournaments/${tournamentId}/matches`, existingMatch.id), {
+            scores: s,
+            winner: computedWinner,
+            p1Games,
+            p2Games,
+            maxPoints: target,
+            isWalkover,
+            walkoverWinner,
+            finalizedAt: Date.now()
+          });
+
+          if (oldWinnerPlayerId !== winnerPlayerId) {
+            await adjustTeamPoints(oldWinnerPlayerId, -pointsDelta, scoringFixture);
+            await adjustTeamPoints(winnerPlayerId, pointsDelta, scoringFixture);
+          }
+        } else {
+          // New match doc
+          await addDoc(collection(db, `tournaments/${tournamentId}/matches`), {
+            fixtureId,
+            scores: s,
+            winner: computedWinner,
+            p1Games,
+            p2Games,
+            maxPoints: target,
+            isWalkover,
+            walkoverWinner,
+            finalizedAt: Date.now()
+          });
+
+          await adjustTeamPoints(winnerPlayerId, pointsDelta, scoringFixture);
+        }
+      } else {
+        // If they changed status back to live/pending, delete match document if it existed
+        if (existingMatch) {
+          const oldWinner = existingMatch.winner;
+          const oldWinnerPlayerId = oldWinner === 'player1'
+            ? (isDoublesMatch ? scoringFixture.player1aId : scoringFixture.player1Id)
+            : (isDoublesMatch ? scoringFixture.player2aId : scoringFixture.player2Id);
+
+          await adjustTeamPoints(oldWinnerPlayerId, -pointsDelta, scoringFixture);
+          await deleteDoc(doc(db, `tournaments/${tournamentId}/matches`, existingMatch.id));
+        }
+      }
+
+      // Finally, update the fixture document
+      await updateDoc(doc(db, `tournaments/${tournamentId}/fixtures`, fixtureId), {
+        status: scoringStatus,
+        scores: s,
+        isWalkover,
+        walkoverWinner,
+        finalizedAt: Date.now()
+      });
+
+      setScoringFixture(null);
+    } catch (e) {
+      console.error("Error saving scores inside FixtureManager:", e);
     } finally {
       setIsGenerating(false);
     }
@@ -619,6 +780,33 @@ export default function FixtureManager({
     }
   };
 
+  const getGroupOrderWeight = (name: string): number => {
+    const n = name.toLowerCase().trim();
+    if (n.includes('final') && !n.includes('semi') && !n.includes('quarter')) return 100;
+    if (n.includes('semi')) return 90;
+    if (n.includes('quarter') && !n.includes('pre')) return 80;
+    if (n.includes('pre_quarter') || n.includes('pre-quarter') || n.includes('pre quarter')) return 70;
+    
+    // Try to match standard "group X" or "X group"
+    const match = n.match(/group\s+([a-z0-9]+)/) || n.match(/([a-z0-9]+)\s+group/);
+    if (match) {
+      const code = match[1];
+      const num = parseInt(code, 10);
+      if (!isNaN(num)) {
+        return 10 + num;
+      }
+      const charCode = code.charCodeAt(0);
+      if (charCode >= 97 && charCode <= 122) { // a-z
+        return 10 + (charCode - 97);
+      }
+    }
+    
+    if (n.includes('group')) {
+      return 19;
+    }
+    return 50;
+  };
+
   // Filter and search computation
   const filteredFixtures = fixtures.filter(f => {
     const matchesSearch = !searchQuery.trim() || 
@@ -636,7 +824,122 @@ export default function FixtureManager({
     const matchesStatus = statusFilter === 'all' || f.status === statusFilter;
 
     return matchesSearch && matchesGroup && matchesType && matchesStatus;
+  }).sort((a, b) => {
+    const nA = parseInt(a.matchNumber, 10);
+    const nB = parseInt(b.matchNumber, 10);
+    if (!isNaN(nA) && !isNaN(nB)) {
+      return nA - nB;
+    }
+    if (a.matchNumber && b.matchNumber) {
+      return a.matchNumber.localeCompare(b.matchNumber, undefined, { numeric: true });
+    }
+    return (a.matchId || '').localeCompare(b.matchId || '');
   });
+
+  const downloadFixturesPDF = () => {
+    const doc = new jsPDF();
+    
+    // Header
+    doc.setFontSize(18);
+    doc.setFont("helvetica", "bold");
+    doc.text("Badminton Tournament Match Fixtures", 14, 22);
+    
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Generated: ${new Date().toLocaleDateString()}`, 14, 28);
+    doc.text(`Tournament ID: ${tournamentId}`, 14, 34);
+    doc.text(`Active Filters: Group: ${groupFilter.toUpperCase()} | Stage: ${typeFilter.toUpperCase()} | Status: ${statusFilter.toUpperCase()}`, 14, 40);
+    
+    doc.setDrawColor(200, 200, 200);
+    doc.line(14, 44, 196, 44);
+    
+    let y = 52;
+    
+    // Group fixtures by group name
+    const groupedFixtures = filteredFixtures.reduce((acc, f) => {
+      const gName = f.groupName || 'Other / Playoff Stages';
+      if (!acc[gName]) acc[gName] = [];
+      acc[gName].push(f);
+      return acc;
+    }, {} as Record<string, any[]>);
+    
+    const sortedGroupNames = Object.keys(groupedFixtures).sort((a, b) => {
+      const wA = getGroupOrderWeight(a);
+      const wB = getGroupOrderWeight(b);
+      if (wA !== wB) return wA - wB;
+      return a.localeCompare(b);
+    });
+    
+    sortedGroupNames.forEach((groupName) => {
+      const matchesInGroup = groupedFixtures[groupName];
+      
+      if (y > 230) {
+        doc.addPage();
+        y = 20;
+      }
+      
+      doc.setFontSize(12);
+      doc.setFont("helvetica", "bold");
+      doc.text(groupName, 14, y);
+      
+      y += 4;
+      doc.setDrawColor(230, 230, 230);
+      doc.line(14, y, 196, y);
+      y += 6;
+      
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "bold");
+      doc.text("M.No", 14, y);
+      doc.text("Match ID", 26, y);
+      doc.text("Player/Team 1", 44, y);
+      doc.text("Player/Team 2", 100, y);
+      doc.text("Stage / Type", 155, y);
+      doc.text("Court", 175, y);
+      
+      y += 3;
+      doc.line(14, y, 196, y);
+      y += 6;
+      
+      doc.setFont("helvetica", "normal");
+      matchesInGroup.forEach((f) => {
+        if (y > 270) {
+          doc.addPage();
+          y = 20;
+          doc.setFont("helvetica", "bold");
+          doc.text(`${groupName} (Continued)`, 14, y);
+          y += 6;
+        }
+        
+        doc.text(f.matchNumber ? String(f.matchNumber) : '-', 14, y);
+        doc.text(f.matchId?.toUpperCase() || 'PND', 26, y);
+        
+        // P1 string
+        const p1Name = f.isDoubles
+          ? `${f.player1aName || 'N/A'} & ${f.player1bName || 'N/A'}`
+          : (f.player1Name || 'N/A');
+        const truncatedP1 = p1Name.length > 25 ? p1Name.substring(0, 23) + ".." : p1Name;
+        doc.text(truncatedP1, 44, y);
+        
+        // P2 string
+        const p2Name = f.isDoubles
+          ? `${f.player2aName || 'N/A'} & ${f.player2bName || 'N/A'}`
+          : (f.player2Name || 'N/A');
+        const truncatedP2 = p2Name.length > 25 ? p2Name.substring(0, 23) + ".." : p2Name;
+        doc.text(truncatedP2, 100, y);
+        
+        // Match Type / Stage
+        doc.text(getMatchTypeLabel(f.matchType), 155, y);
+        
+        // Court
+        doc.text(f.court || "No Court", 175, y);
+        
+        y += 7;
+      });
+      y += 5; // spacing after group table
+    });
+    
+    doc.save("tournament_match_fixtures.pdf");
+  };
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto pb-12">
@@ -661,7 +964,7 @@ export default function FixtureManager({
           <p className="text-slate-300 text-sm leading-relaxed font-medium">
             Create or auto-generate round-robin league matchups and direct elimination stages. View, search, and manage all scheduled fixtures below.
           </p>
-          <div className="flex gap-4 pt-2">
+          <div className="flex flex-wrap gap-4 pt-2">
             <div className="bg-slate-800/60 border border-slate-700/50 px-4 py-2 rounded-xl text-center">
               <span className="block text-xl font-black text-indigo-400">{fixtures.length}</span>
               <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Total Scheduled</span>
@@ -678,6 +981,14 @@ export default function FixtureManager({
               </span>
               <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Pending</span>
             </div>
+            <button
+              onClick={downloadFixturesPDF}
+              className="sm:ml-auto bg-indigo-600 hover:bg-indigo-700 active:scale-98 text-white px-5 py-2.5 rounded-xl font-bold text-xs flex items-center gap-1.5 self-center cursor-pointer shadow-md shadow-indigo-900/40 transition"
+              title="Download Fixtures PDF"
+            >
+              <FileText className="w-4 h-4" />
+              Download Fixtures PDF
+            </button>
           </div>
         </div>
       </div>
@@ -829,6 +1140,17 @@ export default function FixtureManager({
                 <option value="">Select Group / Section</option>
                 {groups.map(g => <option key={g.name} value={g.name}>{g.name}</option>)}
               </select>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold text-slate-500">Match Number</label>
+              <input 
+                type="text" 
+                placeholder="e.g. 1, 2, 101..." 
+                value={matchNumber}
+                onChange={e => setMatchNumber(e.target.value)}
+                className="w-full bg-white border border-slate-200 text-slate-700 p-2.5 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition"
+              />
             </div>
 
             <div className="space-y-2">
@@ -1055,7 +1377,12 @@ export default function FixtureManager({
               acc[groupName].push(f);
               return acc;
             }, {} as Record<string, any[]>)
-          ) as [string, any[]][]).sort((a, b) => a[0].localeCompare(b[0])).map(([groupName, groupMatches]) => {
+          ) as [string, any[]][]).sort((a, b) => {
+            const wA = getGroupOrderWeight(a[0]);
+            const wB = getGroupOrderWeight(b[0]);
+            if (wA !== wB) return wA - wB;
+            return a[0].localeCompare(b[0]);
+          }).map(([groupName, groupMatches]) => {
             return (
               <div key={groupName} className="space-y-4">
                 {/* Section Header */}
@@ -1076,7 +1403,17 @@ export default function FixtureManager({
                 {/* HORIZONTAL MATCHES GRID ("same left to right small box for each match") */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                   <AnimatePresence mode="popLayout">
-                    {groupMatches.map((f, idx) => {
+                    {[...groupMatches].sort((m1, m2) => {
+                      const n1 = parseInt(m1.matchNumber, 10);
+                      const n2 = parseInt(m2.matchNumber, 10);
+                      if (!isNaN(n1) && !isNaN(n2)) {
+                        return n1 - n2;
+                      }
+                      if (m1.matchNumber && m2.matchNumber) {
+                        return m1.matchNumber.localeCompare(m2.matchNumber, undefined, { numeric: true });
+                      }
+                      return (m1.matchId || '').localeCompare(m2.matchId || '');
+                    }).map((f, idx) => {
                       const isDeleting = deletingIds.includes(f.id);
                       // Accent border/ring according to status
                       let statusAccent = 'border-l-slate-300';
@@ -1110,9 +1447,16 @@ export default function FixtureManager({
 
                           {/* Match Card Top */}
                           <div className="flex items-center justify-between gap-2">
-                            <span className="font-mono text-[9px] font-black text-slate-400 tracking-wider bg-slate-50 border border-slate-200 px-1.5 py-0.5 rounded uppercase">
-                              #{f.matchId?.toUpperCase() || 'PND'}
-                            </span>
+                            <div className="flex items-center gap-1.5">
+                              {f.matchNumber && (
+                                <span className="font-sans text-[12px] font-black text-indigo-700 tracking-wide bg-indigo-100/50 border border-indigo-200 px-2 py-0.5 rounded-md">
+                                  #{f.matchNumber}
+                                </span>
+                              )}
+                              <span className="font-mono text-[9px] font-bold text-slate-400 tracking-wider bg-slate-50 border border-slate-200 px-1.5 py-0.5 rounded uppercase">
+                                ID: {f.matchId?.toUpperCase() || 'PND'}
+                              </span>
+                            </div>
 
                             <div className="flex items-center gap-1">
                               <span className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded uppercase tracking-wider ${getMatchTypeBadgeClass(f.matchType)}`}>
@@ -1146,7 +1490,17 @@ export default function FixtureManager({
                                       )}
                                     </div>
                                   </div>
-                                  <span className="text-[9px] text-slate-400 uppercase tracking-widest font-extrabold shrink-0 mt-0.5">T1</span>
+                                  {f.scores && (f.status === 'completed' || f.status === 'live') ? (
+                                    <div className="flex gap-0.5 shrink-0 items-center">
+                                      <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${f.scores.p1g1 > f.scores.p2g1 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50 font-black' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{f.scores.p1g1}</span>
+                                      <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${f.scores.p1g2 > f.scores.p2g2 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50 font-black' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{f.scores.p1g2}</span>
+                                      {(f.scores.p1g3 > 0 || f.scores.p2g3 > 0) && (
+                                        <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${f.scores.p1g3 > f.scores.p2g3 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50 font-black' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{f.scores.p1g3}</span>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span className="text-[9px] text-slate-400 uppercase tracking-widest font-extrabold shrink-0 mt-0.5">T1</span>
+                                  )}
                                 </div>
 
                                 <div className="relative flex items-center justify-center py-0.5">
@@ -1176,7 +1530,17 @@ export default function FixtureManager({
                                       )}
                                     </div>
                                   </div>
-                                  <span className="text-[9px] text-slate-400 uppercase tracking-widest font-extrabold shrink-0 mt-0.5">T2</span>
+                                  {f.scores && (f.status === 'completed' || f.status === 'live') ? (
+                                    <div className="flex gap-0.5 shrink-0 items-center">
+                                      <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${f.scores.p2g1 > f.scores.p1g1 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50 font-black' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{f.scores.p2g1}</span>
+                                      <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${f.scores.p2g2 > f.scores.p1g2 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50 font-black' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{f.scores.p2g2}</span>
+                                      {(f.scores.p1g3 > 0 || f.scores.p2g3 > 0) && (
+                                        <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${f.scores.p2g3 > f.scores.p1g3 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50 font-black' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{f.scores.p2g3}</span>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span className="text-[9px] text-slate-400 uppercase tracking-widest font-extrabold shrink-0 mt-0.5">T2</span>
+                                  )}
                                 </div>
                               </>
                             ) : (
@@ -1192,7 +1556,17 @@ export default function FixtureManager({
                                       </span>
                                     )}
                                   </div>
-                                  <span className="text-[9px] text-slate-400 uppercase tracking-widest font-extrabold shrink-0 mt-0.5">P1</span>
+                                  {f.scores && (f.status === 'completed' || f.status === 'live') ? (
+                                    <div className="flex gap-0.5 shrink-0 items-center">
+                                      <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${f.scores.p1g1 > f.scores.p2g1 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50 font-black' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{f.scores.p1g1}</span>
+                                      <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${f.scores.p1g2 > f.scores.p2g2 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50 font-black' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{f.scores.p1g2}</span>
+                                      {(f.scores.p1g3 > 0 || f.scores.p2g3 > 0) && (
+                                        <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${f.scores.p1g3 > f.scores.p2g3 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50 font-black' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{f.scores.p1g3}</span>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span className="text-[9px] text-slate-400 uppercase tracking-widest font-extrabold shrink-0 mt-0.5">P1</span>
+                                  )}
                                 </div>
 
                                 <div className="relative flex items-center justify-center py-0.5">
@@ -1215,7 +1589,17 @@ export default function FixtureManager({
                                       </span>
                                     )}
                                   </div>
-                                  <span className="text-[9px] text-slate-400 uppercase tracking-widest font-extrabold shrink-0 mt-0.5">P2</span>
+                                  {f.scores && (f.status === 'completed' || f.status === 'live') ? (
+                                    <div className="flex gap-0.5 shrink-0 items-center">
+                                      <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${f.scores.p2g1 > f.scores.p1g1 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50 font-black' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{f.scores.p2g1}</span>
+                                      <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${f.scores.p2g2 > f.scores.p1g2 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50 font-black' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{f.scores.p2g2}</span>
+                                      {(f.scores.p1g3 > 0 || f.scores.p2g3 > 0) && (
+                                        <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${f.scores.p2g3 > f.scores.p1g3 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50 font-black' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{f.scores.p2g3}</span>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span className="text-[9px] text-slate-400 uppercase tracking-widest font-extrabold shrink-0 mt-0.5">P2</span>
+                                  )}
                                 </div>
                               </>
                             )}
@@ -1235,25 +1619,38 @@ export default function FixtureManager({
                               )}
                             </div>
 
-                            {/* Quick Action Buttons */}
-                            {isAdmin && (
-                              <div className="flex items-center gap-1 bg-slate-50 p-0.5 rounded-lg border border-slate-100 shrink-0">
+                            {/* Quick Action & Scoring Buttons */}
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {canScore && (
                                 <button 
-                                  onClick={() => handleEdit(f)} 
-                                  title="Edit Match"
-                                  className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-white rounded transition"
+                                  type="button"
+                                  onClick={() => openScoringModal(f)} 
+                                  title="Enter or Edit Score"
+                                  className="px-2.5 py-1 bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 hover:text-indigo-800 rounded-lg text-[10px] font-extrabold transition-all flex items-center gap-0.5 cursor-pointer"
                                 >
-                                  <Edit3 className="w-3 h-3" />
+                                  <Trophy className="w-2.5 h-2.5" />
+                                  Score
                                 </button>
-                                <button 
-                                  onClick={() => handleDelete(f)} 
-                                  title="Delete Match"
-                                  className="p-1 text-slate-400 hover:text-rose-600 hover:bg-white rounded transition"
-                                >
-                                  <Trash2 className="w-3 h-3" />
-                                </button>
-                              </div>
-                            )}
+                              )}
+                              {isAdmin && (
+                                <div className="flex items-center gap-1 bg-slate-50 p-0.5 rounded-lg border border-slate-100 shrink-0">
+                                  <button 
+                                    onClick={() => handleEdit(f)} 
+                                    title="Edit Match"
+                                    className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-white rounded transition"
+                                  >
+                                    <Edit3 className="w-3 h-3" />
+                                  </button>
+                                  <button 
+                                    onClick={() => handleDelete(f)} 
+                                    title="Delete Match"
+                                    className="p-1 text-slate-400 hover:text-rose-600 hover:bg-white rounded transition"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         </motion.div>
                       );
@@ -1320,6 +1717,240 @@ export default function FixtureManager({
                   className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-xl transition"
                 >
                   Delete Match
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Scoring Modal */}
+      <AnimatePresence>
+        {scoringFixture && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto">
+            {/* Backdrop */}
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setScoringFixture(null)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+            />
+            {/* Modal Box */}
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0, y: 15 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 15 }}
+              className="bg-white rounded-3xl p-6 max-w-lg w-full shadow-2xl relative z-10 border border-slate-100"
+            >
+              <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
+                <div className="flex items-center gap-2.5 text-indigo-600">
+                  <div className="p-2 bg-indigo-50 rounded-xl">
+                    <Trophy className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-black text-slate-900">Record Match Score</h3>
+                    <p className="text-[11px] font-mono text-slate-400 uppercase tracking-wider">
+                      {scoringFixture.matchNumber ? `Match #${scoringFixture.matchNumber}` : `ID: ${scoringFixture.matchId}`}
+                    </p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setScoringFixture(null)}
+                  className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-full transition"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Match Teams Header */}
+              <div className="bg-slate-50/75 rounded-2xl p-4 mb-4 border border-slate-100 flex flex-col gap-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-slate-400 font-extrabold uppercase tracking-wider text-[10px]">Team 1 (T1)</span>
+                  <span className="text-indigo-600 font-black px-2 py-0.5 bg-indigo-50 rounded-full border border-indigo-150 text-[10px]">VS</span>
+                  <span className="text-slate-400 font-extrabold uppercase tracking-wider text-[10px] text-right">Team 2 (T2)</span>
+                </div>
+                <div className="grid grid-cols-2 gap-4 items-center">
+                  <div className="text-sm font-black text-slate-800">
+                    {scoringFixture.isDoubles ? `${scoringFixture.player1aName} & ${scoringFixture.player1bName}` : scoringFixture.player1Name}
+                  </div>
+                  <div className="text-sm font-black text-slate-800 text-right">
+                    {scoringFixture.isDoubles ? `${scoringFixture.player2aName} & ${scoringFixture.player2bName}` : scoringFixture.player2Name}
+                  </div>
+                </div>
+              </div>
+
+              {/* Status and Walkover Controls */}
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                <div>
+                  <label className="block text-[10px] font-extrabold uppercase tracking-widest text-slate-400 mb-1">Match Status</label>
+                  <select 
+                    value={scoringStatus}
+                    onChange={(e) => setScoringStatus(e.target.value as any)}
+                    className="w-full text-xs font-bold text-slate-700 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 outline-hidden focus:border-indigo-500 transition"
+                  >
+                    <option value="completed">Completed (Finalized)</option>
+                    <option value="live">Live (Draft/In-Progress)</option>
+                    <option value="pending">Pending (Clear Scores)</option>
+                  </select>
+                </div>
+                <div className="flex items-end pb-1.5">
+                  <label className="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer select-none">
+                    <input 
+                      type="checkbox"
+                      checked={isWalkover}
+                      onChange={(e) => setIsWalkover(e.target.checked)}
+                      className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 w-4 h-4"
+                    />
+                    <span>Walkover Match?</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Walkover Options */}
+              {isWalkover && (
+                <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4 mb-4">
+                  <label className="block text-[10px] font-extrabold uppercase tracking-widest text-amber-800 mb-1.5">Select Winner of Walkover</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button 
+                      type="button"
+                      onClick={() => setWalkoverWinner('player1')}
+                      className={`px-3 py-2 text-xs font-black rounded-xl border transition ${walkoverWinner === 'player1' ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'}`}
+                    >
+                      {scoringFixture.isDoubles ? `${scoringFixture.player1aName}` : scoringFixture.player1Name}
+                    </button>
+                    <button 
+                      type="button"
+                      onClick={() => setWalkoverWinner('player2')}
+                      className={`px-3 py-2 text-xs font-black rounded-xl border transition ${walkoverWinner === 'player2' ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'}`}
+                    >
+                      {scoringFixture.isDoubles ? `${scoringFixture.player2aName}` : scoringFixture.player2Name}
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-amber-700 mt-2">
+                    Note: A walkover automatically awards the win and full points target ({scoringFixture.pointsTarget || '15'} pts) per set to the selected winner.
+                  </p>
+                </div>
+              )}
+
+              {/* Score Input Form */}
+              {!isWalkover && scoringStatus !== 'pending' && (
+                <div className="space-y-3.5 mb-5 border-t border-slate-100 pt-4">
+                  <div className="grid grid-cols-3 gap-2 text-center text-[10px] font-extrabold uppercase tracking-widest text-slate-400 mb-1">
+                    <span>Set 1</span>
+                    <span>Set 2</span>
+                    <span>Set 3 (If played)</span>
+                  </div>
+
+                  {/* Team 1 Score Row */}
+                  <div className="bg-slate-50/50 border border-slate-100/80 rounded-2xl p-3">
+                    <span className="block text-[10px] font-extrabold text-indigo-600 uppercase tracking-wide mb-2 truncate">
+                      {scoringFixture.isDoubles ? `${scoringFixture.player1aName} & ${scoringFixture.player1bName}` : scoringFixture.player1Name}
+                    </span>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <input 
+                          type="number"
+                          min="0"
+                          max="30"
+                          value={scP1g1}
+                          onChange={(e) => setScP1g1(e.target.value)}
+                          className="w-full text-center text-sm font-black text-slate-800 bg-white border border-slate-200 rounded-xl px-2 py-2 focus:border-indigo-500 outline-hidden transition font-mono"
+                          placeholder="0"
+                        />
+                      </div>
+                      <div>
+                        <input 
+                          type="number"
+                          min="0"
+                          max="30"
+                          value={scP1g2}
+                          onChange={(e) => setScP1g2(e.target.value)}
+                          className="w-full text-center text-sm font-black text-slate-800 bg-white border border-slate-200 rounded-xl px-2 py-2 focus:border-indigo-500 outline-hidden transition font-mono"
+                          placeholder="0"
+                        />
+                      </div>
+                      <div>
+                        <input 
+                          type="number"
+                          min="0"
+                          max="30"
+                          value={scP1g3}
+                          onChange={(e) => setScP1g3(e.target.value)}
+                          className="w-full text-center text-sm font-black text-slate-800 bg-white border border-slate-200 rounded-xl px-2 py-2 focus:border-indigo-500 outline-hidden transition font-mono"
+                          placeholder="0"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Team 2 Score Row */}
+                  <div className="bg-slate-50/50 border border-slate-100/80 rounded-2xl p-3">
+                    <span className="block text-[10px] font-extrabold text-indigo-600 uppercase tracking-wide mb-2 truncate text-right">
+                      {scoringFixture.isDoubles ? `${scoringFixture.player2aName} & ${scoringFixture.player2bName}` : scoringFixture.player2Name}
+                    </span>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <input 
+                          type="number"
+                          min="0"
+                          max="30"
+                          value={scP2g1}
+                          onChange={(e) => setScP2g1(e.target.value)}
+                          className="w-full text-center text-sm font-black text-slate-800 bg-white border border-slate-200 rounded-xl px-2 py-2 focus:border-indigo-500 outline-hidden transition font-mono"
+                          placeholder="0"
+                        />
+                      </div>
+                      <div>
+                        <input 
+                          type="number"
+                          min="0"
+                          max="30"
+                          value={scP2g2}
+                          onChange={(e) => setScP2g2(e.target.value)}
+                          className="w-full text-center text-sm font-black text-slate-800 bg-white border border-slate-200 rounded-xl px-2 py-2 focus:border-indigo-500 outline-hidden transition font-mono"
+                          placeholder="0"
+                        />
+                      </div>
+                      <div>
+                        <input 
+                          type="number"
+                          min="0"
+                          max="30"
+                          value={scP2g3}
+                          onChange={(e) => setScP2g3(e.target.value)}
+                          className="w-full text-center text-sm font-black text-slate-800 bg-white border border-slate-200 rounded-xl px-2 py-2 focus:border-indigo-500 outline-hidden transition font-mono"
+                          placeholder="0"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Warning or note */}
+              {scoringStatus === 'pending' && (
+                <div className="bg-rose-50 border border-rose-100 rounded-2xl p-4 mb-5 text-xs text-rose-700 font-semibold">
+                  Setting the status back to "Pending" will clear all scores and revert any awarded standing points for this match.
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex gap-3 justify-end border-t border-slate-100 pt-4">
+                <button 
+                  type="button"
+                  onClick={() => setScoringFixture(null)}
+                  className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-xs rounded-xl transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="button"
+                  onClick={handleSaveScores}
+                  className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  Save Scores
                 </button>
               </div>
             </motion.div>

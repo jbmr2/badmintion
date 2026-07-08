@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { jsPDF } from 'jspdf';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { 
   collection, 
@@ -31,7 +32,8 @@ import {
   Shuffle,
   ChevronLeft,
   Copy,
-  Check
+  Check,
+  AlertTriangle
 } from 'lucide-react';
 
 export default function MatchScoreManager({ 
@@ -49,6 +51,8 @@ export default function MatchScoreManager({
   const [scores, setScores] = useState<any>({});
   const [activeFixtureId, setActiveFixtureId] = useState<string | null>(null);
   const [filter, setFilter] = useState<'all' | 'live' | 'upcoming' | 'completed'>('all');
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [categories, setCategories] = useState<any[]>([]);
   const [search, setSearch] = useState('');
   const [saving, setSaving] = useState(false);
   const [courts, setCourts] = useState<string[]>(['Court 1', 'Court 2', 'Court 3', 'Court 4', 'Court 5', 'Court 6']);
@@ -59,6 +63,9 @@ export default function MatchScoreManager({
   const [allRootsLevel1, setAllRootsLevel1] = useState<any[]>([]);
   const [allRootsLevel2, setAllRootsLevel2] = useState<any[]>([]);
   const [allRootsPlayers, setAllRootsPlayers] = useState<any[]>([]);
+
+  const isStructureMaster = tournamentId !== '_master_' && (roots.length === 0 || roots.some(r => r.isMasterFallback));
+  const structureTournamentId = isStructureMaster ? '_master_' : tournamentId;
 
   // Set-by-set & Court interactive state
   const [currentSetIndex, setCurrentSetIndex] = useState<number>(1);
@@ -79,6 +86,9 @@ export default function MatchScoreManager({
   // OBS Stream URL Copy State
   const [copiedFixtureId, setCopiedFixtureId] = useState<string | null>(null);
   const [copiedCourtName, setCopiedCourtName] = useState<string | null>(null);
+  const [walkoverConfirm, setWalkoverConfirm] = useState<{ fixtureId: string; winnerKey: 'player1' | 'player2'; winnerName: string } | null>(null);
+  const [resetMatchConfirm, setResetMatchConfirm] = useState<string | null>(null);
+  const [clearSetConfirm, setClearSetConfirm] = useState<number | null>(null);
 
   const copyObsUrl = (fixtureId: string) => {
     const url = new URL(window.location.origin);
@@ -144,23 +154,40 @@ export default function MatchScoreManager({
     };
   }, [tournamentId]);
 
+  useEffect(() => {
+    const q = query(collection(db, `tournaments/${tournamentId}/categories`));
+    const unsubscribe = onSnapshot(q, 
+      (snapshot) => setCategories(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))),
+      (error) => handleFirestoreError(error, OperationType.LIST, `tournaments/${tournamentId}/categories`)
+    );
+    return () => unsubscribe();
+  }, [tournamentId]);
+
   // Fetch roots, level1s, level2s, and players assignments for L2 Data
   useEffect(() => {
     if (!tournamentId) return;
     const qRoots = query(collection(db, `tournaments/${tournamentId}/roots`));
     const unsubscribeRoots = onSnapshot(qRoots, (snapshot) => {
-      setRoots(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+      if (snapshot.empty && tournamentId !== '_master_') {
+        const qMasterRoots = query(collection(db, `tournaments/_master_/roots`));
+        const unsubscribeMasterRoots = onSnapshot(qMasterRoots, (masterSnap) => {
+          setRoots(masterSnap.docs.map(d => ({ id: d.id, isMasterFallback: true, ...d.data() })));
+        }, (e) => console.error("Error fetching master roots in MatchScoreManager:", e));
+        return () => unsubscribeMasterRoots();
+      } else {
+        setRoots(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+      }
     }, (e) => console.error("Error fetching roots in MatchScoreManager:", e));
     return () => unsubscribeRoots();
   }, [tournamentId]);
 
   useEffect(() => {
-    if (roots.length === 0 || !tournamentId) {
+    if (roots.length === 0 || !structureTournamentId) {
       setAllRootsLevel1([]);
       return;
     }
     const unsubscribes = roots.map(root => {
-      const q = query(collection(db, `tournaments/${tournamentId}/roots/${root.id}/level1`));
+      const q = query(collection(db, `tournaments/${structureTournamentId}/roots/${root.id}/level1`));
       return onSnapshot(q, (snapshot) => {
         setAllRootsLevel1(prev => {
           const filtered = prev.filter(item => item.rootId !== root.id);
@@ -170,15 +197,15 @@ export default function MatchScoreManager({
       }, (err) => console.error("Error fetching level1s in MatchScoreManager:", err));
     });
     return () => unsubscribes.forEach(unsub => unsub());
-  }, [roots, tournamentId]);
+  }, [roots, structureTournamentId]);
 
   useEffect(() => {
-    if (allRootsLevel1.length === 0 || !tournamentId) {
+    if (allRootsLevel1.length === 0 || !structureTournamentId) {
       setAllRootsLevel2([]);
       return;
     }
     const unsubscribes = allRootsLevel1.map(l1 => {
-      const q = query(collection(db, `tournaments/${tournamentId}/roots/${l1.rootId}/level1/${l1.id}/level2`));
+      const q = query(collection(db, `tournaments/${structureTournamentId}/roots/${l1.rootId}/level1/${l1.id}/level2`));
       return onSnapshot(q, (snapshot) => {
         setAllRootsLevel2(prev => {
           const filtered = prev.filter(item => item.level1Id !== l1.id);
@@ -195,7 +222,7 @@ export default function MatchScoreManager({
       }, (err) => console.error("Error fetching level2s in MatchScoreManager:", err));
     });
     return () => unsubscribes.forEach(unsub => unsub());
-  }, [allRootsLevel1, tournamentId]);
+  }, [allRootsLevel1, structureTournamentId]);
 
   useEffect(() => {
     if (allRootsLevel2.length === 0 || !tournamentId) {
@@ -400,9 +427,12 @@ export default function MatchScoreManager({
   };
 
   // Reset a live match or completed match back to pending
-  const resetMatch = async (fixtureId: string) => {
+  const resetMatch = async (fixtureId: string, bypassConfirm = false) => {
     if (saving) return;
-    if (!window.confirm("Are you sure you want to reset this match? This will clear all scores and status, and subtract any points gained from team standings.")) return;
+    if (!bypassConfirm) {
+      setResetMatchConfirm(fixtureId);
+      return;
+    }
     
     try {
       setSaving(true);
@@ -525,6 +555,95 @@ export default function MatchScoreManager({
     }
   };
 
+  // Declare a walkover victory
+  const declareWalkover = async (fixtureId: string, winnerKey: 'player1' | 'player2', bypassConfirm = false) => {
+    if (saving) return;
+    const fixture = fixtures.find(f => f.id === fixtureId);
+    if (!fixture) return;
+
+    const winnerName = winnerKey === 'player1'
+      ? (fixture.isDoubles ? (fixture.player1bName ? `${fixture.player1aName} & ${fixture.player1bName}` : fixture.player1aName) : fixture.player1Name)
+      : (fixture.isDoubles ? (fixture.player2bName ? `${fixture.player2aName} & ${fixture.player2bName}` : fixture.player2aName) : fixture.player2Name);
+
+    if (!bypassConfirm) {
+      setWalkoverConfirm({ fixtureId, winnerKey, winnerName });
+      return;
+    }
+
+    setSaving(true);
+    const maxPoints = Number(fixture.pointsTarget) || (fixture.matchType === 'league' ? 15 : 21);
+    
+    // Set 2 sets victory (2-0) for the winner
+    const s = winnerKey === 'player1'
+      ? { p1g1: maxPoints, p2g1: 0, p1g2: maxPoints, p2g2: 0, p1g3: 0, p2g3: 0 }
+      : { p1g1: 0, p2g1: maxPoints, p1g2: 0, p2g2: maxPoints, p1g3: 0, p2g3: 0 };
+
+    const p1Games = winnerKey === 'player1' ? 2 : 0;
+    const p2Games = winnerKey === 'player2' ? 2 : 0;
+
+    try {
+      const isDoublesMatch = !!(fixture.isDoubles || fixture.player1aId || fixture.player1bId || fixture.player2aId || fixture.player2bId);
+      const winnerPlayerId = winnerKey === 'player1' 
+        ? (isDoublesMatch ? fixture.player1aId : fixture.player1Id) 
+        : (isDoublesMatch ? fixture.player2aId : fixture.player2Id);
+
+      // Check if there was an existing match document
+      const existingMatch = matches.find(m => m.fixtureId === fixtureId);
+      const pointsDelta = getPointsDelta(fixture);
+
+      if (existingMatch) {
+        const oldWinner = existingMatch.winner;
+        const oldWinnerPlayerId = oldWinner === 'player1' 
+          ? (isDoublesMatch ? fixture.player1aId : fixture.player1Id) 
+          : (isDoublesMatch ? fixture.player2aId : fixture.player2Id);
+        
+        await updateDoc(doc(db, `tournaments/${tournamentId}/matches`, existingMatch.id), {
+          scores: s,
+          winner: winnerKey,
+          p1Games,
+          p2Games,
+          maxPoints,
+          isWalkover: true,
+          walkoverWinner: winnerKey,
+          finalizedAt: Date.now()
+        });
+
+        if (oldWinnerPlayerId !== winnerPlayerId) {
+          await adjustTeamPoints(oldWinnerPlayerId, -pointsDelta, fixture);
+          await adjustTeamPoints(winnerPlayerId, pointsDelta, fixture);
+        }
+      } else {
+        await addDoc(collection(db, `tournaments/${tournamentId}/matches`), { 
+          fixtureId, 
+          scores: s, 
+          winner: winnerKey, 
+          p1Games, 
+          p2Games, 
+          maxPoints,
+          isWalkover: true,
+          walkoverWinner: winnerKey,
+          finalizedAt: Date.now()
+        });
+
+        await adjustTeamPoints(winnerPlayerId, pointsDelta, fixture);
+      }
+
+      await updateDoc(doc(db, `tournaments/${tournamentId}/fixtures`, fixtureId), { 
+        status: 'completed',
+        scores: s,
+        isWalkover: true,
+        walkoverWinner: winnerKey,
+        finalizedAt: Date.now()
+      });
+      
+      setActiveFixtureId(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `tournaments/${tournamentId}/matches`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   // Check if a player has game point or match point
   const getScoringBadge = (fixture: any, setIndex: number, playerKey: 'player1' | 'player2') => {
     if (!fixture) return null;
@@ -592,12 +711,14 @@ export default function MatchScoreManager({
 
   const filteredFixtures = fixtures.filter(f => {
     const status = f.status || 'pending';
-    const matchesFilter = filter === 'all' || 
+    const matchesStatus = filter === 'all' || 
       (filter === 'live' && status === 'live') ||
       (filter === 'upcoming' && status === 'pending') ||
       (filter === 'completed' && status === 'completed');
+    
+    const matchesCategory = categoryFilter === 'all' || (f.groupName === categoryFilter);
       
-    if (!matchesFilter) return false;
+    if (!matchesStatus || !matchesCategory) return false;
     
     const searchLower = search.toLowerCase();
     return (
@@ -606,7 +727,161 @@ export default function MatchScoreManager({
       f.matchId?.toLowerCase().includes(searchLower) ||
       f.groupName?.toLowerCase().includes(searchLower)
     );
+  }).sort((a, b) => {
+    const nA = parseInt(a.matchNumber, 10);
+    const nB = parseInt(b.matchNumber, 10);
+    if (!isNaN(nA) && !isNaN(nB)) {
+      return nA - nB;
+    }
+    if (a.matchNumber && b.matchNumber) {
+      return a.matchNumber.localeCompare(b.matchNumber, undefined, { numeric: true });
+    }
+    return (a.matchId || '').localeCompare(b.matchId || '');
   });
+
+  const getGroupOrderWeight = (name: string): number => {
+    const n = name.toLowerCase().trim();
+    if (n.includes('final') && !n.includes('semi') && !n.includes('quarter')) return 100;
+    if (n.includes('semi')) return 90;
+    if (n.includes('quarter') && !n.includes('pre')) return 80;
+    if (n.includes('pre_quarter') || n.includes('pre-quarter') || n.includes('pre quarter')) return 70;
+    
+    // Try to match standard "group X" or "X group"
+    const match = n.match(/group\s+([a-z0-9]+)/) || n.match(/([a-z0-9]+)\s+group/);
+    if (match) {
+      const code = match[1];
+      const num = parseInt(code, 10);
+      if (!isNaN(num)) {
+        return 10 + num;
+      }
+      const charCode = code.charCodeAt(0);
+      if (charCode >= 97 && charCode <= 122) { // a-z
+        return 10 + (charCode - 97);
+      }
+    }
+    
+    if (n.includes('group')) {
+      return 19;
+    }
+    return 50;
+  };
+
+  const downloadMatchesPDF = () => {
+    const doc = new jsPDF();
+    
+    // Header
+    doc.setFontSize(18);
+    doc.setFont("helvetica", "bold");
+    doc.text("Badminton Tournament Match Scores & Fixtures", 14, 22);
+    
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Generated: ${new Date().toLocaleDateString()}`, 14, 28);
+    doc.text(`Tournament ID: ${tournamentId}`, 14, 34);
+    doc.text(`Active Filter: ${filter.toUpperCase()}`, 14, 40);
+    
+    doc.setDrawColor(200, 200, 200);
+    doc.line(14, 44, 196, 44);
+    
+    let y = 52;
+    
+    // Group fixtures by group name
+    const groupedFixtures = filteredFixtures.reduce((acc, f) => {
+      const gName = f.groupName || 'Other / Playoff Stages';
+      if (!acc[gName]) acc[gName] = [];
+      acc[gName].push(f);
+      return acc;
+    }, {} as Record<string, any[]>);
+    
+    const sortedGroupNames = Object.keys(groupedFixtures).sort((a, b) => {
+      const wA = getGroupOrderWeight(a);
+      const wB = getGroupOrderWeight(b);
+      if (wA !== wB) return wA - wB;
+      return a.localeCompare(b);
+    });
+    
+    sortedGroupNames.forEach((groupName) => {
+      const matchesInGroup = groupedFixtures[groupName];
+      
+      if (y > 230) {
+        doc.addPage();
+        y = 20;
+      }
+      
+      doc.setFontSize(12);
+      doc.setFont("helvetica", "bold");
+      doc.text(groupName, 14, y);
+      
+      y += 4;
+      doc.setDrawColor(230, 230, 230);
+      doc.line(14, y, 196, y);
+      y += 6;
+      
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "bold");
+      doc.text("Match ID", 14, y);
+      doc.text("Player/Team 1", 35, y);
+      doc.text("Player/Team 2", 95, y);
+      doc.text("Status", 155, y);
+      doc.text("Scores", 175, y);
+      
+      y += 3;
+      doc.line(14, y, 196, y);
+      y += 6;
+      
+      doc.setFont("helvetica", "normal");
+      matchesInGroup.forEach((f) => {
+        if (y > 270) {
+          doc.addPage();
+          y = 20;
+          doc.setFont("helvetica", "bold");
+          doc.text(`${groupName} (Continued)`, 14, y);
+          y += 6;
+        }
+        
+        doc.text(f.id.substring(0, 6).toUpperCase(), 14, y);
+        
+        // P1 string
+        const p1Name = f.isDoubles
+          ? `${f.player1aName || 'N/A'} & ${f.player1bName || 'N/A'}`
+          : (f.player1Name || 'N/A');
+        const truncatedP1 = p1Name.length > 28 ? p1Name.substring(0, 26) + ".." : p1Name;
+        doc.text(truncatedP1, 35, y);
+        
+        // P2 string
+        const p2Name = f.isDoubles
+          ? `${f.player2aName || 'N/A'} & ${f.player2bName || 'N/A'}`
+          : (f.player2Name || 'N/A');
+        const truncatedP2 = p2Name.length > 28 ? p2Name.substring(0, 26) + ".." : p2Name;
+        doc.text(truncatedP2, 95, y);
+        
+        // Status
+        const statusStr = f.status === 'completed' ? 'Completed' : (f.status === 'live' ? 'LIVE' : 'Upcoming');
+        doc.text(statusStr, 155, y);
+        
+        // Scores
+        let scoreStr = "-";
+        if (f.isWalkover) {
+          scoreStr = f.walkoverWinner === 'player1' ? "W.O. P1 Win" : "W.O. P2 Win";
+        } else if (f.scores) {
+          const s = f.scores;
+          const sets = [];
+          if (s.p1g1 > 0 || s.p2g1 > 0) sets.push(`${s.p1g1}-${s.p2g1}`);
+          if (s.p1g2 > 0 || s.p2g2 > 0) sets.push(`${s.p1g2}-${s.p2g2}`);
+          if (s.p1g3 > 0 || s.p2g3 > 0) sets.push(`${s.p1g3}-${s.p2g3}`);
+          if (sets.length > 0) {
+            scoreStr = sets.join(', ');
+          }
+        }
+        doc.text(scoreStr, 175, y);
+        
+        y += 7;
+      });
+      y += 5; // spacing after group table
+    });
+    
+    doc.save("match_scores_report.pdf");
+  };
 
   return (
     <div className="space-y-6 p-6 bg-white rounded-2xl shadow-sm border border-slate-100 font-sans">
@@ -618,12 +893,20 @@ export default function MatchScoreManager({
           <p className="text-slate-500 text-sm font-medium mt-0.5">Track, schedule, start live scoring, or edit past match results.</p>
         </div>
         {!activeFixtureId && (
-          <button 
-            onClick={onNext}
-            className="px-5 py-2.5 bg-slate-900 text-white font-bold rounded-xl text-sm hover:bg-slate-800 transition shadow-sm hover:shadow flex items-center gap-1.5 self-stretch sm:self-auto justify-center"
-          >
-            View Points Standings <ChevronRight className="w-4 h-4" />
-          </button>
+          <div className="flex flex-wrap items-center gap-2.5 self-stretch sm:self-auto">
+            <button
+              onClick={downloadMatchesPDF}
+              className="px-5 py-2.5 bg-indigo-600 text-white font-bold rounded-xl text-sm hover:bg-indigo-700 transition shadow-sm hover:shadow flex items-center gap-1.5 justify-center cursor-pointer"
+            >
+              PDF Download
+            </button>
+            <button 
+              onClick={onNext}
+              className="px-5 py-2.5 bg-slate-900 text-white font-bold rounded-xl text-sm hover:bg-slate-800 transition shadow-sm hover:shadow flex items-center gap-1.5 justify-center"
+            >
+              View Points Standings <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
         )}
       </div>
 
@@ -681,34 +964,45 @@ export default function MatchScoreManager({
             </div>
 
             {/* Filter Tabs */}
-            <div className="flex p-1 bg-slate-100 rounded-xl overflow-x-auto whitespace-nowrap self-start md:self-auto">
-              <button 
-                onClick={() => setFilter('all')}
-                className={`px-4 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${filter === 'all' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+            <div className="flex gap-2">
+              <select 
+                value={categoryFilter}
+                onChange={e => setCategoryFilter(e.target.value)}
+                className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500/20"
               >
-                All <span className="px-1.5 py-0.5 rounded-md bg-slate-200 text-[10px] text-slate-700 font-bold">{counts.all}</span>
-              </button>
-              <button 
-                onClick={() => setFilter('live')}
-                className={`px-4 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${filter === 'live' ? 'bg-white text-red-600 shadow-sm' : 'text-slate-600 hover:text-red-500'}`}
-              >
-                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
-                Live <span className="px-1.5 py-0.5 rounded-md bg-red-100 text-[10px] text-red-700 font-bold">{counts.live}</span>
-              </button>
-              <button 
-                onClick={() => setFilter('upcoming')}
-                className={`px-4 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${filter === 'upcoming' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-indigo-500'}`}
-              >
-                <Calendar className="w-3 h-3" />
-                Upcoming <span className="px-1.5 py-0.5 rounded-md bg-indigo-100 text-[10px] text-indigo-700 font-bold">{counts.upcoming}</span>
-              </button>
-              <button 
-                onClick={() => setFilter('completed')}
-                className={`px-4 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${filter === 'completed' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-600 hover:text-emerald-500'}`}
-              >
-                <CheckCircle2 className="w-3 h-3" />
-                Completed <span className="px-1.5 py-0.5 rounded-md bg-emerald-100 text-[10px] text-emerald-700 font-bold">{counts.completed}</span>
-              </button>
+                <option value="all">All Categories</option>
+                {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+              </select>
+              
+              <div className="flex p-1 bg-slate-100 rounded-xl overflow-x-auto whitespace-nowrap self-start md:self-auto">
+                <button 
+                  onClick={() => setFilter('all')}
+                  className={`px-4 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${filter === 'all' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                >
+                  All <span className="px-1.5 py-0.5 rounded-md bg-slate-200 text-[10px] text-slate-700 font-bold">{counts.all}</span>
+                </button>
+                <button 
+                  onClick={() => setFilter('live')}
+                  className={`px-4 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${filter === 'live' ? 'bg-white text-red-600 shadow-sm' : 'text-slate-600 hover:text-red-500'}`}
+                >
+                  <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+                  Live <span className="px-1.5 py-0.5 rounded-md bg-red-100 text-[10px] text-red-700 font-bold">{counts.live}</span>
+                </button>
+                <button 
+                  onClick={() => setFilter('upcoming')}
+                  className={`px-4 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${filter === 'upcoming' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-indigo-500'}`}
+                >
+                  <Calendar className="w-3 h-3" />
+                  Upcoming <span className="px-1.5 py-0.5 rounded-md bg-indigo-100 text-[10px] text-indigo-700 font-bold">{counts.upcoming}</span>
+                </button>
+                <button 
+                  onClick={() => setFilter('completed')}
+                  className={`px-4 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${filter === 'completed' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-600 hover:text-emerald-500'}`}
+                >
+                  <CheckCircle2 className="w-3 h-3" />
+                  Completed <span className="px-1.5 py-0.5 rounded-md bg-emerald-100 text-[10px] text-emerald-700 font-bold">{counts.completed}</span>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -722,8 +1016,33 @@ export default function MatchScoreManager({
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {filteredFixtures.map((f, idx) => {
+            <div className="space-y-8">
+              {(Object.entries(
+                filteredFixtures.reduce((acc, f) => {
+                  const groupName = f.groupName || 'Other / Playoff Stages';
+                  if (!acc[groupName]) acc[groupName] = [];
+                  acc[groupName].push(f);
+                  return acc;
+                }, {} as Record<string, any[]>)
+              ) as [string, any[]][]).sort((a, b) => {
+                const wA = getGroupOrderWeight(a[0]);
+                const wB = getGroupOrderWeight(b[0]);
+                if (wA !== wB) return wA - wB;
+                return a[0].localeCompare(b[0]);
+              }).map(([groupName, groupMatches]) => (
+                <div key={groupName} className="space-y-4">
+                  {/* Group Header */}
+                  <div className="flex items-center gap-2 border-b border-slate-100 pb-2">
+                    <span className="w-1.5 h-4 bg-indigo-600 rounded-full"></span>
+                    <h4 className="text-sm font-black text-slate-700 uppercase tracking-wider">{groupName}</h4>
+                    <span className="px-2 py-0.5 rounded-full bg-slate-100 text-[10px] font-bold text-slate-500">
+                      {groupMatches.length} matches
+                    </span>
+                  </div>
+
+                  {/* Matches Grid */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                    {groupMatches.map((f) => {
                 const status = f.status || 'pending';
                 const matchResult = matches.find(m => m.fixtureId === f.id);
                 const currentScores = f.scores || { p1g1: 0, p2g1: 0, p1g2: 0, p2g2: 0, p1g3: 0, p2g3: 0 };
@@ -758,8 +1077,13 @@ export default function MatchScoreManager({
                     <div className="flex justify-between items-start gap-1.5">
                       <div className="space-y-0.5 min-w-0 flex-1">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest bg-slate-50 border border-slate-150/60 px-1.5 py-0.5 rounded">
-                            #{f.matchId?.toUpperCase() || 'PND'}
+                          {f.matchNumber && (
+                            <span className="text-[12px] font-black text-indigo-700 bg-indigo-100/50 border border-indigo-200 px-2 py-0.5 rounded-md">
+                              #{f.matchNumber}
+                            </span>
+                          )}
+                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest bg-slate-50 border border-slate-150/60 px-1.5 py-0.5 rounded">
+                            ID: {f.matchId?.toUpperCase() || 'PND'}
                           </span>
                           <span className="text-[9px] font-black text-slate-500 truncate max-w-[85px]" title={f.groupName}>
                             {f.groupName}
@@ -817,13 +1141,21 @@ export default function MatchScoreManager({
                         </div>
                         {/* Scores displays */}
                         {(status === 'live' || status === 'completed') && (
-                          <div className="flex gap-1 shrink-0 mt-0.5">
-                            <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${currentScores.p1g1 > currentScores.p2g1 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{currentScores.p1g1}</span>
-                            <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${currentScores.p1g2 > currentScores.p2g2 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{currentScores.p1g2}</span>
-                            {(currentScores.p1g3 > 0 || currentScores.p2g3 > 0) && (
-                              <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${currentScores.p1g3 > currentScores.p2g3 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{currentScores.p1g3}</span>
-                            )}
-                          </div>
+                          f.isWalkover ? (
+                            f.walkoverWinner === 'player1' ? (
+                              <span className="text-[9px] bg-amber-100 text-amber-800 font-extrabold px-1.5 py-0.5 rounded border border-amber-200 shrink-0">W.O. WIN</span>
+                            ) : (
+                              <span className="text-[9px] bg-slate-50 text-slate-400 font-semibold px-1.5 py-0.5 rounded border border-slate-150 shrink-0">L via W.O.</span>
+                            )
+                          ) : (
+                            <div className="flex gap-1 shrink-0 mt-0.5">
+                              <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${currentScores.p1g1 > currentScores.p2g1 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{currentScores.p1g1}</span>
+                              <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${currentScores.p1g2 > currentScores.p2g2 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{currentScores.p1g2}</span>
+                              {(currentScores.p1g3 > 0 || currentScores.p2g3 > 0) && (
+                                <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${currentScores.p1g3 > currentScores.p2g3 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{currentScores.p1g3}</span>
+                              )}
+                            </div>
+                          )
                         )}
                       </div>
 
@@ -871,13 +1203,21 @@ export default function MatchScoreManager({
                         </div>
                         {/* Scores displays */}
                         {(status === 'live' || status === 'completed') && (
-                          <div className="flex gap-1 shrink-0 mt-0.5">
-                            <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${currentScores.p2g1 > currentScores.p1g1 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{currentScores.p2g1}</span>
-                            <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${currentScores.p2g2 > currentScores.p1g2 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{currentScores.p2g2}</span>
-                            {(currentScores.p1g3 > 0 || currentScores.p2g3 > 0) && (
-                              <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${currentScores.p2g3 > currentScores.p1g3 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{currentScores.p2g3}</span>
-                            )}
-                          </div>
+                          f.isWalkover ? (
+                            f.walkoverWinner === 'player2' ? (
+                              <span className="text-[9px] bg-amber-100 text-amber-800 font-extrabold px-1.5 py-0.5 rounded border border-amber-200 shrink-0">W.O. WIN</span>
+                            ) : (
+                              <span className="text-[9px] bg-slate-50 text-slate-400 font-semibold px-1.5 py-0.5 rounded border border-slate-150 shrink-0">L via W.O.</span>
+                            )
+                          ) : (
+                            <div className="flex gap-1 shrink-0 mt-0.5">
+                              <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${currentScores.p2g1 > currentScores.p1g1 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{currentScores.p2g1}</span>
+                              <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${currentScores.p2g2 > currentScores.p1g2 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{currentScores.p2g2}</span>
+                              {(currentScores.p1g3 > 0 || currentScores.p2g3 > 0) && (
+                                <span className={`w-5 h-5 rounded flex items-center justify-center font-mono text-[10px] font-black ${currentScores.p2g3 > currentScores.p1g3 ? 'bg-indigo-100 text-indigo-700 border border-indigo-200/50' : 'bg-slate-50 text-slate-400 border border-slate-100'}`}>{currentScores.p2g3}</span>
+                              )}
+                            </div>
+                          )
                         )}
                       </div>
                     </div>
@@ -966,6 +1306,9 @@ export default function MatchScoreManager({
                 );
               })}
             </div>
+          </div>
+        ))}
+      </div>
           )}
         </div>
       ) : (
@@ -1361,6 +1704,43 @@ export default function MatchScoreManager({
             </div>
           </div>
 
+          {/* Walkover Victory Box */}
+          {canScore && (
+            (() => {
+              const p1Name = activeFixture?.isDoubles 
+                ? (activeFixture.player1bName ? `${activeFixture.player1aName} & ${activeFixture.player1bName}` : activeFixture.player1aName) 
+                : activeFixture?.player1Name || "Player 1";
+              const p2Name = activeFixture?.isDoubles 
+                ? (activeFixture.player2bName ? `${activeFixture.player2aName} & ${activeFixture.player2bName}` : activeFixture.player2aName) 
+                : activeFixture?.player2Name || "Player 2";
+              return (
+                <div className="bg-amber-50/50 border border-amber-200/60 rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3">
+                  <div className="text-left w-full sm:w-auto">
+                    <span className="text-[9px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-black uppercase tracking-wider">WALKOVER (W.O.) CONTROL</span>
+                    <p className="text-xs font-bold text-slate-800 mt-1">Declare an Immediate Walkover Win</p>
+                    <p className="text-[10px] text-slate-500 font-medium">Bypass regular set scores if an opponent fails to show up or forfeits.</p>
+                  </div>
+                  <div className="flex gap-2 w-full sm:w-auto shrink-0 justify-end">
+                    <button
+                      onClick={() => declareWalkover(activeFixture.id, 'player1')}
+                      disabled={saving}
+                      className="px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black transition shadow-xs active:scale-95 flex-1 sm:flex-none text-center"
+                    >
+                      Win to {p1Name}
+                    </button>
+                    <button
+                      onClick={() => declareWalkover(activeFixture.id, 'player2')}
+                      disabled={saving}
+                      className="px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black transition shadow-xs active:scale-95 flex-1 sm:flex-none text-center"
+                    >
+                      Win to {p2Name}
+                    </button>
+                  </div>
+                </div>
+              );
+            })()
+          )}
+
           {/* Scoring Actions Block */}
           <div className="flex flex-col sm:flex-row gap-3 pt-4 border-t border-slate-200">
             {canScore ? (
@@ -1373,13 +1753,8 @@ export default function MatchScoreManager({
                   <CheckCircle2 className="w-5 h-5" /> {saving ? "Saving Match..." : "Save Match & End"}
                 </button>
                 <button
-                  onClick={() => {
-                    if (window.confirm("Are you sure you want to clear current set's scores back to 0?")) {
-                      updateScore(activeFixture.id, `p1g${currentSetIndex}`, -scores[activeFixture.id]?.[`p1g${currentSetIndex}`] || 0);
-                      updateScore(activeFixture.id, `p2g${currentSetIndex}`, -scores[activeFixture.id]?.[`p2g${currentSetIndex}`] || 0);
-                    }
-                  }}
-                  className="px-5 py-3.5 bg-white border border-slate-200 text-slate-600 hover:text-slate-800 hover:bg-slate-100 font-bold rounded-xl transition flex items-center justify-center gap-1.5 shadow-2xs"
+                  onClick={() => setClearSetConfirm(currentSetIndex)}
+                  className="px-5 py-3.5 bg-white border border-slate-200 text-slate-600 hover:text-slate-800 hover:bg-slate-100 font-bold rounded-xl transition flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer"
                 >
                   <RefreshCw className="w-4 h-4 text-slate-400" /> Clear Set {currentSetIndex}
                 </button>
@@ -1499,6 +1874,117 @@ export default function MatchScoreManager({
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Custom Walkover Confirmation Modal */}
+      {walkoverConfirm && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl max-w-md w-full border border-slate-100 shadow-2xl p-6 text-center transform scale-100 transition-all duration-300 relative overflow-hidden">
+            <div className="absolute top-0 inset-x-0 h-2 bg-amber-500" />
+            <div className="mx-auto w-16 h-16 bg-amber-50 text-amber-600 rounded-full flex items-center justify-center mb-4 border border-amber-100">
+              <Sparkles className="w-8 h-8 text-amber-500" />
+            </div>
+            <h3 className="font-black text-xl text-slate-800 tracking-tight">Declare Walkover Victory</h3>
+            <p className="text-slate-500 text-sm mt-2 font-medium">
+              Are you sure you want to declare a WALKOVER victory for <strong className="text-amber-700 font-extrabold">{walkoverConfirm.winnerName}</strong>?
+            </p>
+            <p className="text-slate-400 text-[11px] mt-1">
+              This will record a 2-0 set win, award tournament points, and end the match immediately.
+            </p>
+            <div className="mt-6 flex flex-col gap-2">
+              <button
+                onClick={async () => {
+                  const { fixtureId, winnerKey } = walkoverConfirm;
+                  setWalkoverConfirm(null);
+                  await declareWalkover(fixtureId, winnerKey, true);
+                }}
+                className="w-full py-3 bg-amber-600 hover:bg-amber-700 text-white font-extrabold rounded-xl transition shadow-lg flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                Yes, Declare Winner
+              </button>
+              <button
+                onClick={() => setWalkoverConfirm(null)}
+                className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl text-xs transition cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Custom Reset Match Confirmation Modal */}
+      {resetMatchConfirm && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl max-w-md w-full border border-slate-100 shadow-2xl p-6 text-center transform scale-100 transition-all duration-300 relative overflow-hidden">
+            <div className="absolute top-0 inset-x-0 h-2 bg-rose-500" />
+            <div className="mx-auto w-16 h-16 bg-rose-50 text-rose-600 rounded-full flex items-center justify-center mb-4 border border-rose-100">
+              <AlertTriangle className="w-8 h-8 text-rose-500" />
+            </div>
+            <h3 className="font-black text-xl text-slate-800 tracking-tight">Reset Whole Match?</h3>
+            <p className="text-slate-500 text-sm mt-2 font-medium">
+              Are you sure you want to reset this match? This will clear all scores, restore status to pending, and subtract any points gained from team standings.
+            </p>
+            <p className="text-slate-400 text-[11px] mt-1">
+              This action cannot be undone. All game results and standing points from this match will be lost.
+            </p>
+            <div className="mt-6 flex flex-col gap-2">
+              <button
+                onClick={async () => {
+                  const fid = resetMatchConfirm;
+                  setResetMatchConfirm(null);
+                  await resetMatch(fid, true);
+                }}
+                className="w-full py-3 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-xl transition shadow-lg flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                Yes, Reset Match
+              </button>
+              <button
+                onClick={() => setResetMatchConfirm(null)}
+                className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl text-xs transition cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Custom Clear Set Scores Confirmation Modal */}
+      {clearSetConfirm !== null && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl max-w-md w-full border border-slate-100 shadow-2xl p-6 text-center transform scale-100 transition-all duration-300 relative overflow-hidden">
+            <div className="absolute top-0 inset-x-0 h-2 bg-indigo-500" />
+            <div className="mx-auto w-16 h-16 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center mb-4 border border-indigo-100">
+              <RefreshCw className="w-8 h-8 text-indigo-500" />
+            </div>
+            <h3 className="font-black text-xl text-slate-800 tracking-tight">Clear Set {clearSetConfirm} Score?</h3>
+            <p className="text-slate-500 text-sm mt-2 font-medium">
+              Are you sure you want to clear current Set {clearSetConfirm}'s scores back to 0 - 0?
+            </p>
+            <div className="mt-6 flex flex-col gap-2">
+              <button
+                onClick={async () => {
+                  const setIdx = clearSetConfirm;
+                  setClearSetConfirm(null);
+                  if (activeFixture) {
+                    await updateScore(activeFixture.id, `p1g${setIdx}`, -(scores[activeFixture.id]?.[`p1g${setIdx}`] || 0));
+                    await updateScore(activeFixture.id, `p2g${setIdx}`, -(scores[activeFixture.id]?.[`p2g${setIdx}`] || 0));
+                  }
+                }}
+                className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl transition shadow-lg flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                Yes, Clear Scores
+              </button>
+              <button
+                onClick={() => setClearSetConfirm(null)}
+                className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl text-xs transition cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -27,7 +27,8 @@ import {
   Trophy,
   Activity,
   AlertTriangle,
-  ChevronRight
+  ChevronRight,
+  Sparkles
 } from 'lucide-react';
 
 interface RefereePanelProps {
@@ -63,6 +64,9 @@ export default function RefereePanel({ tournamentId, userRole = 'user' }: Refere
     isMatchOver: boolean;
   } | null>(null);
   const [lastPromptedSet, setLastPromptedSet] = useState<number>(0);
+  const [walkoverConfirm, setWalkoverConfirm] = useState<{ winnerKey: 'player1' | 'player2'; winnerName: string } | null>(null);
+  const [resetMatchConfirm, setResetMatchConfirm] = useState<boolean>(false);
+  const [completeMatchConfirm, setCompleteMatchConfirm] = useState<boolean>(false);
 
   // Real-time listener for fixtures, matches, and tournament courts
   useEffect(() => {
@@ -301,10 +305,13 @@ export default function RefereePanel({ tournamentId, userRole = 'user' }: Refere
   };
 
   // Reset current match state
-  const resetMatch = async () => {
+  const resetMatch = async (bypassConfirm = false) => {
     if (!activeFixture) return;
-    if (!window.confirm("Are you sure you want to reset this match? This will clear all scores and restore status to pending, subtracting any awarded points from team standings.")) return;
-
+    if (!bypassConfirm) {
+      setResetMatchConfirm(true);
+      return;
+    }
+    
     try {
       setSaving(true);
       
@@ -335,7 +342,7 @@ export default function RefereePanel({ tournamentId, userRole = 'user' }: Refere
   };
 
   // Complete and save match results
-  const completeMatch = async () => {
+  const completeMatch = async (bypassConfirm = false) => {
     if (!activeFixture) return;
     if (!activeFixture.court) {
       alert("Assigning a court is mandatory before you can enter scores.");
@@ -372,7 +379,10 @@ export default function RefereePanel({ tournamentId, userRole = 'user' }: Refere
       return;
     }
 
-    if (!window.confirm(`Are you sure you want to finalize this match? Winner will be declared based on sets won.`)) return;
+    if (!bypassConfirm) {
+      setCompleteMatchConfirm(true);
+      return;
+    }
 
     setSaving(true);
     try {
@@ -430,6 +440,90 @@ export default function RefereePanel({ tournamentId, userRole = 'user' }: Refere
       setActiveFixtureId(null);
     } catch (error) {
       console.error("Error completing match:", error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Declare a walkover victory
+  const declareWalkover = async (winnerKey: 'player1' | 'player2', bypassConfirm = false) => {
+    if (!activeFixture || saving) return;
+
+    const winnerName = winnerKey === 'player1'
+      ? (activeFixture.isDoubles ? (activeFixture.player1bName ? `${activeFixture.player1aName} & ${activeFixture.player1bName}` : activeFixture.player1aName) : activeFixture.player1Name)
+      : (activeFixture.isDoubles ? (activeFixture.player2bName ? `${activeFixture.player2aName} & ${activeFixture.player2bName}` : activeFixture.player2aName) : activeFixture.player2Name);
+
+    if (!bypassConfirm) {
+      setWalkoverConfirm({ winnerKey, winnerName });
+      return;
+    }
+
+    setSaving(true);
+    const target = pointsTarget;
+    const s = winnerKey === 'player1'
+      ? { p1g1: target, p2g1: 0, p1g2: target, p2g2: 0, p1g3: 0, p2g3: 0 }
+      : { p1g1: 0, p2g1: target, p1g2: 0, p2g2: target, p1g3: 0, p2g3: 0 };
+
+    const p1Games = winnerKey === 'player1' ? 2 : 0;
+    const p2Games = winnerKey === 'player2' ? 2 : 0;
+
+    try {
+      const isDoublesMatch = !!(activeFixture.isDoubles || activeFixture.player1aId || activeFixture.player1bId || activeFixture.player2aId || activeFixture.player2bId);
+      const winnerPlayerId = winnerKey === 'player1' 
+        ? (isDoublesMatch ? activeFixture.player1aId : activeFixture.player1Id) 
+        : (isDoublesMatch ? activeFixture.player2aId : activeFixture.player2Id);
+
+      const pointsDelta = getPointsDelta(activeFixture);
+
+      const existingMatch = matches.find(m => m.fixtureId === activeFixture.id);
+      if (existingMatch) {
+        const oldWinner = existingMatch.winner;
+        const oldWinnerPlayerId = oldWinner === 'player1' 
+          ? (isDoublesMatch ? activeFixture.player1aId : activeFixture.player1Id) 
+          : (isDoublesMatch ? activeFixture.player2aId : activeFixture.player2Id);
+
+        await updateDoc(doc(db, `tournaments/${tournamentId}/matches`, existingMatch.id), {
+          scores: s,
+          winner: winnerKey,
+          p1Games,
+          p2Games,
+          maxPoints: target,
+          isWalkover: true,
+          walkoverWinner: winnerKey,
+          finalizedAt: Date.now()
+        });
+
+        if (oldWinnerPlayerId !== winnerPlayerId) {
+          await adjustTeamPoints(oldWinnerPlayerId, -pointsDelta, activeFixture);
+          await adjustTeamPoints(winnerPlayerId, pointsDelta, activeFixture);
+        }
+      } else {
+        await addDoc(collection(db, `tournaments/${tournamentId}/matches`), {
+          fixtureId: activeFixture.id,
+          scores: s,
+          winner: winnerKey,
+          p1Games,
+          p2Games,
+          maxPoints: target,
+          isWalkover: true,
+          walkoverWinner: winnerKey,
+          finalizedAt: Date.now()
+        });
+
+        await adjustTeamPoints(winnerPlayerId, pointsDelta, activeFixture);
+      }
+
+      await updateDoc(doc(db, `tournaments/${tournamentId}/fixtures`, activeFixture.id), {
+        status: 'completed',
+        scores: s,
+        isWalkover: true,
+        walkoverWinner: winnerKey,
+        finalizedAt: Date.now()
+      });
+
+      setActiveFixtureId(null);
+    } catch (error) {
+      console.error("Error declaring walkover:", error);
     } finally {
       setSaving(false);
     }
@@ -651,17 +745,25 @@ export default function RefereePanel({ tournamentId, userRole = 'user' }: Refere
                           <span className="font-bold text-slate-800 text-sm truncate max-w-[160px] group-hover:text-indigo-600 transition-colors">
                             {fixture.player1Name}
                           </span>
-                          <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-slate-500">
-                            <span className={s.p1g1 > s.p2g1 && isSetFinished(s.p1g1, s.p2g1, target) ? 'text-emerald-500 font-black' : ''}>{s.p1g1}</span>
-                            <span>•</span>
-                            <span className={s.p1g2 > s.p2g2 && isSetFinished(s.p1g2, s.p2g2, target) ? 'text-emerald-500 font-black' : ''}>{s.p1g2}</span>
-                            {isSetFinished(s.p1g2, s.p2g2, target) && (
-                              <>
-                                <span>•</span>
-                                <span className={s.p1g3 > s.p2g3 && isSetFinished(s.p1g3, s.p2g3, target) ? 'text-emerald-500 font-black' : ''}>{s.p1g3}</span>
-                              </>
-                            )}
-                          </div>
+                          {fixture.isWalkover ? (
+                            fixture.walkoverWinner === 'player1' ? (
+                              <span className="text-[9px] bg-amber-100 text-amber-800 font-extrabold px-1.5 py-0.5 rounded border border-amber-200">W.O. WIN</span>
+                            ) : (
+                              <span className="text-[9px] bg-slate-50 text-slate-400 font-semibold px-1.5 py-0.5 rounded border border-slate-150">L via W.O.</span>
+                            )
+                          ) : (
+                            <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-slate-500">
+                              <span className={s.p1g1 > s.p2g1 && isSetFinished(s.p1g1, s.p2g1, target) ? 'text-emerald-500 font-black' : ''}>{s.p1g1}</span>
+                              <span>•</span>
+                              <span className={s.p1g2 > s.p2g2 && isSetFinished(s.p1g2, s.p2g2, target) ? 'text-emerald-500 font-black' : ''}>{s.p1g2}</span>
+                              {isSetFinished(s.p1g2, s.p2g2, target) && (
+                                <>
+                                  <span>•</span>
+                                  <span className={s.p1g3 > s.p2g3 && isSetFinished(s.p1g3, s.p2g3, target) ? 'text-emerald-500 font-black' : ''}>{s.p1g3}</span>
+                                </>
+                              )}
+                            </div>
+                          )}
                         </div>
 
                         {/* Player 2 Row */}
@@ -669,17 +771,25 @@ export default function RefereePanel({ tournamentId, userRole = 'user' }: Refere
                           <span className="font-bold text-slate-800 text-sm truncate max-w-[160px] group-hover:text-indigo-600 transition-colors">
                             {fixture.player2Name}
                           </span>
-                          <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-slate-500">
-                            <span className={s.p2g1 > s.p1g1 && isSetFinished(s.p1g1, s.p2g1, target) ? 'text-emerald-500 font-black' : ''}>{s.p2g1}</span>
-                            <span>•</span>
-                            <span className={s.p2g2 > s.p1g2 && isSetFinished(s.p1g2, s.p2g2, target) ? 'text-emerald-500 font-black' : ''}>{s.p2g2}</span>
-                            {isSetFinished(s.p1g2, s.p2g2, target) && (
-                              <>
-                                <span>•</span>
-                                <span className={s.p2g3 > s.p1g3 && isSetFinished(s.p1g3, s.p2g3, target) ? 'text-emerald-500 font-black' : ''}>{s.p2g3}</span>
-                              </>
-                            )}
-                          </div>
+                          {fixture.isWalkover ? (
+                            fixture.walkoverWinner === 'player2' ? (
+                              <span className="text-[9px] bg-amber-100 text-amber-800 font-extrabold px-1.5 py-0.5 rounded border border-amber-200">W.O. WIN</span>
+                            ) : (
+                              <span className="text-[9px] bg-slate-50 text-slate-400 font-semibold px-1.5 py-0.5 rounded border border-slate-150">L via W.O.</span>
+                            )
+                          ) : (
+                            <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-slate-500">
+                              <span className={s.p2g1 > s.p1g1 && isSetFinished(s.p1g1, s.p2g1, target) ? 'text-emerald-500 font-black' : ''}>{s.p2g1}</span>
+                              <span>•</span>
+                              <span className={s.p2g2 > s.p1g2 && isSetFinished(s.p1g2, s.p2g2, target) ? 'text-emerald-500 font-black' : ''}>{s.p2g2}</span>
+                              {isSetFinished(s.p1g2, s.p2g2, target) && (
+                                <>
+                                  <span>•</span>
+                                  <span className={s.p2g3 > s.p1g3 && isSetFinished(s.p1g3, s.p2g3, target) ? 'text-emerald-500 font-black' : ''}>{s.p2g3}</span>
+                                </>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
 
@@ -1010,6 +1120,38 @@ export default function RefereePanel({ tournamentId, userRole = 'user' }: Refere
                       >
                         <RotateCcw className="w-3.5 h-3.5" /> Reset Match
                       </button>
+
+                      <div className="border-t border-slate-100 pt-3 mt-3 space-y-2 text-left">
+                        <span className="text-[9px] font-black uppercase text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 block text-center tracking-wide">WALKOVER (W.O.) CONTROL</span>
+                        {(() => {
+                          const p1Name = activeFixture?.isDoubles 
+                            ? (activeFixture.player1bName ? `${activeFixture.player1aName} & ${activeFixture.player1bName}` : activeFixture.player1aName) 
+                            : activeFixture?.player1Name || "Player 1";
+                          const p2Name = activeFixture?.isDoubles 
+                            ? (activeFixture.player2bName ? `${activeFixture.player2aName} & ${activeFixture.player2bName}` : activeFixture.player2aName) 
+                            : activeFixture?.player2Name || "Player 2";
+                          return (
+                            <div className="grid grid-cols-2 gap-2">
+                              <button
+                                onClick={() => declareWalkover('player1')}
+                                disabled={saving}
+                                className="text-center font-bold text-[11px] py-2 px-2.5 rounded-lg border border-amber-200 text-amber-800 bg-amber-50/60 hover:bg-amber-100 transition active:scale-95 truncate"
+                                title={`Declare Walkover for ${p1Name}`}
+                              >
+                                W.O. to {p1Name}
+                              </button>
+                              <button
+                                onClick={() => declareWalkover('player2')}
+                                disabled={saving}
+                                className="text-center font-bold text-[11px] py-2 px-2.5 rounded-lg border border-amber-200 text-amber-800 bg-amber-50/60 hover:bg-amber-100 transition active:scale-95 truncate"
+                                title={`Declare Walkover for ${p2Name}`}
+                              >
+                                W.O. to {p2Name}
+                              </button>
+                            </div>
+                          );
+                        })()}
+                      </div>
                     </>
                   ) : (
                     <div className="p-3 bg-slate-50 border border-slate-200 text-slate-500 rounded-xl text-[11px] font-medium text-center">
@@ -1089,6 +1231,115 @@ export default function RefereePanel({ tournamentId, userRole = 'user' }: Refere
                 className="w-full py-2.5 bg-white border border-slate-200 text-slate-500 hover:text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer"
               >
                 Stay on Set {completedSetPopup.setIndex} (Correct Score)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Custom Walkover Confirmation Modal */}
+      {walkoverConfirm && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl max-w-md w-full border border-slate-100 shadow-2xl p-6 text-center transform scale-100 transition-all duration-300 relative overflow-hidden">
+            <div className="absolute top-0 inset-x-0 h-2 bg-amber-500" />
+            <div className="mx-auto w-16 h-16 bg-amber-50 text-amber-600 rounded-full flex items-center justify-center mb-4 border border-amber-100">
+              <Sparkles className="w-8 h-8 text-amber-500" />
+            </div>
+            <h3 className="font-black text-xl text-slate-800 tracking-tight">Declare Walkover Victory</h3>
+            <p className="text-slate-500 text-sm mt-2 font-medium">
+              Are you sure you want to declare a WALKOVER victory for <strong className="text-amber-700 font-extrabold">{walkoverConfirm.winnerName}</strong>?
+            </p>
+            <p className="text-slate-400 text-[11px] mt-1">
+              This will record a 2-0 set win, award tournament points, and end the match immediately.
+            </p>
+            <div className="mt-6 flex flex-col gap-2">
+              <button
+                onClick={async () => {
+                  const { winnerKey } = walkoverConfirm;
+                  setWalkoverConfirm(null);
+                  await declareWalkover(winnerKey, true);
+                }}
+                className="w-full py-3 bg-amber-600 hover:bg-amber-700 text-white font-extrabold rounded-xl transition shadow-lg flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                Yes, Declare Winner
+              </button>
+              <button
+                onClick={() => setWalkoverConfirm(null)}
+                className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl text-xs transition cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Custom Reset Match Confirmation Modal */}
+      {resetMatchConfirm && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl max-w-md w-full border border-slate-100 shadow-2xl p-6 text-center transform scale-100 transition-all duration-300 relative overflow-hidden">
+            <div className="absolute top-0 inset-x-0 h-2 bg-rose-500" />
+            <div className="mx-auto w-16 h-16 bg-rose-50 text-rose-600 rounded-full flex items-center justify-center mb-4 border border-rose-100">
+              <AlertTriangle className="w-8 h-8 text-rose-500" />
+            </div>
+            <h3 className="font-black text-xl text-slate-800 tracking-tight">Reset Whole Match?</h3>
+            <p className="text-slate-500 text-sm mt-2 font-medium">
+              Are you sure you want to reset this match? This will clear all scores and restore status to pending, subtracting any awarded points from team standings.
+            </p>
+            <p className="text-slate-400 text-[11px] mt-1">
+              This action cannot be undone. All game results and standing points from this match will be lost.
+            </p>
+            <div className="mt-6 flex flex-col gap-2">
+              <button
+                onClick={async () => {
+                  setResetMatchConfirm(false);
+                  await resetMatch(true);
+                }}
+                className="w-full py-3 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-xl transition shadow-lg flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                Yes, Reset Match
+              </button>
+              <button
+                onClick={() => setResetMatchConfirm(false)}
+                className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl text-xs transition cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Custom Complete Match Confirmation Modal */}
+      {completeMatchConfirm && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl max-w-md w-full border border-slate-100 shadow-2xl p-6 text-center transform scale-100 transition-all duration-300 relative overflow-hidden">
+            <div className="absolute top-0 inset-x-0 h-2 bg-emerald-500" />
+            <div className="mx-auto w-16 h-16 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mb-4 border border-emerald-100">
+              <Trophy className="w-8 h-8 text-emerald-500" />
+            </div>
+            <h3 className="font-black text-xl text-slate-800 tracking-tight">Finalize Match Results?</h3>
+            <p className="text-slate-500 text-sm mt-2 font-medium">
+              Are you sure you want to finalize this match? The winner will be declared based on sets won.
+            </p>
+            <p className="text-slate-400 text-[11px] mt-1">
+              This will publish the results, update standings, and close active scoring controls.
+            </p>
+            <div className="mt-6 flex flex-col gap-2">
+              <button
+                onClick={async () => {
+                  setCompleteMatchConfirm(false);
+                  await completeMatch(true);
+                }}
+                className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl transition shadow-lg flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                Yes, Save Match & End
+              </button>
+              <button
+                onClick={() => setCompleteMatchConfirm(false)}
+                className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl text-xs transition cursor-pointer"
+              >
+                Cancel
               </button>
             </div>
           </div>
