@@ -686,15 +686,51 @@ export default function APIPortal({ currentTournamentId, onBack }: APIPortalProp
                           </div>
 
                           {/* Match participants */}
-                          <div className="mt-2 space-y-1 text-xs">
+                          <div className="mt-2 space-y-1.5 text-xs">
                             <div className="flex justify-between items-center font-bold text-slate-800">
-                              <span className={f.scores?.p1g1 > f.scores?.p2g1 && isCompleted ? "text-indigo-600" : ""}>
-                                {f.player1Name}
-                              </span>
-                              <span className="text-[10px] text-slate-400 font-normal">vs</span>
-                              <span className={f.scores?.p2g1 > f.scores?.p1g1 && isCompleted ? "text-indigo-600" : ""}>
-                                {f.player2Name}
-                              </span>
+                              <div className="flex flex-col items-start">
+                                <span className={f.scores?.p1g1 > f.scores?.p2g1 && isCompleted ? "text-indigo-600 font-extrabold" : "font-semibold"}>
+                                  {f.isDoubles 
+                                    ? (f.player1bName ? `${f.player1aName} & ${f.player1bName}` : f.player1aName)
+                                    : f.player1Name}
+                                </span>
+                                {f.isDoubles ? (
+                                  (f.player1aL2Name || f.player1bL2Name) && (
+                                    <span className="text-[9px] text-indigo-600 font-medium mt-0.5 bg-indigo-50/70 border border-indigo-100/50 px-1 py-0.2 rounded-sm">
+                                      L2: {[f.player1aL2Name, f.player1bL2Name].filter(Boolean).join(' & ')}
+                                    </span>
+                                  )
+                                ) : (
+                                  f.player1L2Name && (
+                                    <span className="text-[9px] text-indigo-600 font-medium mt-0.5 bg-indigo-50/70 border border-indigo-100/50 px-1 py-0.2 rounded-sm">
+                                      L2: {f.player1L2Name}
+                                    </span>
+                                  )
+                                )}
+                              </div>
+
+                              <span className="text-[10px] text-slate-400 font-normal mx-2 shrink-0">vs</span>
+
+                              <div className="flex flex-col items-end text-right">
+                                <span className={f.scores?.p2g1 > f.scores?.p1g1 && isCompleted ? "text-indigo-600 font-extrabold" : "font-semibold"}>
+                                  {f.isDoubles 
+                                    ? (f.player2bName ? `${f.player2aName} & ${f.player2bName}` : f.player2aName)
+                                    : f.player2Name}
+                                </span>
+                                {f.isDoubles ? (
+                                  (f.player2aL2Name || f.player2bL2Name) && (
+                                    <span className="text-[9px] text-indigo-600 font-medium mt-0.5 bg-indigo-50/70 border border-indigo-100/50 px-1 py-0.2 rounded-sm">
+                                      L2: {[f.player2aL2Name, f.player2bL2Name].filter(Boolean).join(' & ')}
+                                    </span>
+                                  )
+                                ) : (
+                                  f.player2L2Name && (
+                                    <span className="text-[9px] text-indigo-600 font-medium mt-0.5 bg-indigo-50/70 border border-indigo-100/50 px-1 py-0.2 rounded-sm">
+                                      L2: {f.player2L2Name}
+                                    </span>
+                                  )
+                                )}
+                              </div>
                             </div>
 
                             {/* Scores block */}

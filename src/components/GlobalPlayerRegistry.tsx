@@ -111,6 +111,7 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
     } catch (err) {
       console.error("Error saving player:", err);
       alert("Failed to save player profile.");
+      handleFirestoreError(err, OperationType.WRITE, `players/${cleanMobile}`);
     } finally {
       setIsSubmittingManual(false);
     }
@@ -140,6 +141,8 @@ export default function GlobalPlayerRegistry({ userRole }: { userRole?: 'admin' 
       await deleteDoc(doc(db, 'players', mobile));
     } catch (err) {
       console.error("Error deleting global profile:", err);
+      alert("Failed to delete player profile.");
+      handleFirestoreError(err, OperationType.DELETE, `players/${mobile}`);
     }
   };
 

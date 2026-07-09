@@ -41,7 +41,8 @@ service cloud.firestore {
     // --- Global / Root Rules ---
     match /players/{playerId} {
       allow read: if true;
-      allow write: if isSignedIn() && isValidPlayer(incoming());
+      allow create, update: if isSignedIn() && isValidPlayer(incoming());
+      allow delete: if isSignedIn();
     }
 
     match /live_pings/{pingId} {

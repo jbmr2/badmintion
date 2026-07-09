@@ -245,11 +245,110 @@ async function startServer() {
       const colRef = collection(db, `tournaments/${tournamentId}/fixtures`);
       const snap = await getDocs(colRef);
       const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      res.json(list);
+
+      try {
+        const playerHierarchyMap = await getPlayerHierarchyMap(db, fs, tournamentId);
+        const enriched = enrichFixturesWithHierarchy(list, playerHierarchyMap);
+        res.json(enriched);
+      } catch (innerErr) {
+        console.error("Error enriching fixtures with hierarchy:", innerErr);
+        res.json(list);
+      }
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
   });
+
+  // Helper: Retrieve map of playerId -> hierarchy names (L1, L2, Root)
+  async function getPlayerHierarchyMap(db, fs, tournamentId) {
+    const { collection, getDocs } = fs;
+    const playerHierarchyMap = {};
+
+    try {
+      // 1. Get Roots
+      let rootsSnap = await getDocs(collection(db, `tournaments/${tournamentId}/roots`));
+      let roots = rootsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      let structureTournamentId = tournamentId;
+
+      if (roots.length === 0 && tournamentId !== '_master_') {
+        const masterRootsSnap = await getDocs(collection(db, 'tournaments/_master_/roots'));
+        roots = masterRootsSnap.docs.map(d => ({ id: d.id, isMasterFallback: true, ...d.data() }));
+        structureTournamentId = '_master_';
+      }
+
+      for (const root of roots) {
+        // 2. Get Level1 for this root
+        const level1Snap = await getDocs(collection(db, `tournaments/${structureTournamentId}/roots/${root.id}/level1`));
+        const level1s = level1Snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+        for (const l1 of level1s) {
+          // 3. Get Level2 for this level1
+          const level2Snap = await getDocs(collection(db, `tournaments/${structureTournamentId}/roots/${root.id}/level1/${l1.id}/level2`));
+          const level2s = level2Snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+          for (const l2 of level2s) {
+            // 4. Get players assigned to this level2 (under tournamentId!)
+            const playersSnap = await getDocs(collection(db, `tournaments/${tournamentId}/roots/${root.id}/level1/${l1.id}/level2/${l2.id}/players`));
+            playersSnap.docs.forEach(pDoc => {
+              playerHierarchyMap[pDoc.id] = {
+                level1Id: l1.id,
+                level1Name: l1.name || '',
+                level2Id: l2.id,
+                level2Name: l2.name || '',
+                rootId: root.id,
+                rootName: root.name || ''
+              };
+            });
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Error building player hierarchy map:", err);
+    }
+
+    return playerHierarchyMap;
+  }
+
+  // Helper: Enrich fixture entries with their player hierarchy data
+  function enrichFixturesWithHierarchy(fixturesList, playerHierarchyMap) {
+    return fixturesList.map(f => {
+      const enriched = { ...f };
+      if (f.isDoubles) {
+        if (f.player1aId && playerHierarchyMap[f.player1aId]) {
+          enriched.player1aL1Name = playerHierarchyMap[f.player1aId].level1Name;
+          enriched.player1aL2Name = playerHierarchyMap[f.player1aId].level2Name;
+          enriched.player1aRootName = playerHierarchyMap[f.player1aId].rootName;
+        }
+        if (f.player1bId && playerHierarchyMap[f.player1bId]) {
+          enriched.player1bL1Name = playerHierarchyMap[f.player1bId].level1Name;
+          enriched.player1bL2Name = playerHierarchyMap[f.player1bId].level2Name;
+          enriched.player1bRootName = playerHierarchyMap[f.player1bId].rootName;
+        }
+        if (f.player2aId && playerHierarchyMap[f.player2aId]) {
+          enriched.player2aL1Name = playerHierarchyMap[f.player2aId].level1Name;
+          enriched.player2aL2Name = playerHierarchyMap[f.player2aId].level2Name;
+          enriched.player2aRootName = playerHierarchyMap[f.player2aId].rootName;
+        }
+        if (f.player2bId && playerHierarchyMap[f.player2bId]) {
+          enriched.player2bL1Name = playerHierarchyMap[f.player2bId].level1Name;
+          enriched.player2bL2Name = playerHierarchyMap[f.player2bId].level2Name;
+          enriched.player2bRootName = playerHierarchyMap[f.player2bId].rootName;
+        }
+      } else {
+        if (f.player1Id && playerHierarchyMap[f.player1Id]) {
+          enriched.player1L1Name = playerHierarchyMap[f.player1Id].level1Name;
+          enriched.player1L2Name = playerHierarchyMap[f.player1Id].level2Name;
+          enriched.player1RootName = playerHierarchyMap[f.player1Id].rootName;
+        }
+        if (f.player2Id && playerHierarchyMap[f.player2Id]) {
+          enriched.player2L1Name = playerHierarchyMap[f.player2Id].level1Name;
+          enriched.player2L2Name = playerHierarchyMap[f.player2Id].level2Name;
+          enriched.player2RootName = playerHierarchyMap[f.player2Id].rootName;
+        }
+      }
+      return enriched;
+    });
+  }
 
   // GET matches/scores entered in a tournament
   app.get('/api/tournaments/:tournamentId/matches', checkDb, async (req, res) => {
@@ -458,7 +557,14 @@ async function startServer() {
 
       // 4. Get Fixtures
       const fixturesSnap = await getDocs(collection(db, `tournaments/${tournamentId}/fixtures`));
-      const fixtures = fixturesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      let fixtures = fixturesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      try {
+        const playerHierarchyMap = await getPlayerHierarchyMap(db, fs, tournamentId);
+        fixtures = enrichFixturesWithHierarchy(fixtures, playerHierarchyMap);
+      } catch (innerErr) {
+        console.error("Error enriching consolidated fixtures with hierarchy:", innerErr);
+      }
 
       // 5. Get Matches
       const matchesSnap = await getDocs(collection(db, `tournaments/${tournamentId}/matches`));

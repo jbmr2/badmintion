@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { jsPDF } from 'jspdf';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { 
@@ -33,7 +33,8 @@ import {
   ChevronLeft,
   Copy,
   Check,
-  AlertTriangle
+  AlertTriangle,
+  GripVertical
 } from 'lucide-react';
 
 export default function MatchScoreManager({ 
@@ -62,7 +63,7 @@ export default function MatchScoreManager({
   const [roots, setRoots] = useState<any[]>([]);
   const [allRootsLevel1, setAllRootsLevel1] = useState<any[]>([]);
   const [allRootsLevel2, setAllRootsLevel2] = useState<any[]>([]);
-  const [allRootsPlayers, setAllRootsPlayers] = useState<any[]>([]);
+  const [rawRootsPlayers, setRawRootsPlayers] = useState<any[]>([]);
 
   const isStructureMaster = tournamentId !== '_master_' && (roots.length === 0 || roots.some(r => r.isMasterFallback));
   const structureTournamentId = isStructureMaster ? '_master_' : tournamentId;
@@ -89,6 +90,56 @@ export default function MatchScoreManager({
   const [walkoverConfirm, setWalkoverConfirm] = useState<{ fixtureId: string; winnerKey: 'player1' | 'player2'; winnerName: string } | null>(null);
   const [resetMatchConfirm, setResetMatchConfirm] = useState<string | null>(null);
   const [clearSetConfirm, setClearSetConfirm] = useState<number | null>(null);
+
+  // Drag & Drop States for swapping matchNumber
+  const [draggedFixture, setDraggedFixture] = useState<any | null>(null);
+  const [isDraggingOverId, setIsDraggingOverId] = useState<string | null>(null);
+
+  const handleDragStart = (e: React.DragEvent, fixture: any) => {
+    if (!canScore) {
+      e.preventDefault();
+      return;
+    }
+    setDraggedFixture(fixture);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', fixture.id);
+  };
+
+  const handleDragOver = (e: React.DragEvent, fixtureId: string) => {
+    if (!canScore || !draggedFixture) return;
+    e.preventDefault();
+    if (fixtureId !== draggedFixture.id) {
+      setIsDraggingOverId(fixtureId);
+    }
+  };
+
+  const handleDragLeave = () => {
+    setIsDraggingOverId(null);
+  };
+
+  const handleDrop = async (e: React.DragEvent, targetFixture: any) => {
+    e.preventDefault();
+    setIsDraggingOverId(null);
+    if (!canScore || !draggedFixture || draggedFixture.id === targetFixture.id) {
+      setDraggedFixture(null);
+      return;
+    }
+
+    try {
+      const draggedNum = draggedFixture.matchNumber || '';
+      const targetNum = targetFixture.matchNumber || '';
+
+      const draggedRef = doc(db, `tournaments/${tournamentId}/fixtures`, draggedFixture.id);
+      const targetRef = doc(db, `tournaments/${tournamentId}/fixtures`, targetFixture.id);
+
+      await updateDoc(draggedRef, { matchNumber: targetNum });
+      await updateDoc(targetRef, { matchNumber: draggedNum });
+    } catch (error) {
+      console.error("Error swapping match numbers via drag and drop:", error);
+    } finally {
+      setDraggedFixture(null);
+    }
+  };
 
   const copyObsUrl = (fixtureId: string) => {
     const url = new URL(window.location.origin);
@@ -226,13 +277,13 @@ export default function MatchScoreManager({
 
   useEffect(() => {
     if (allRootsLevel2.length === 0 || !tournamentId) {
-      setAllRootsPlayers([]);
+      setRawRootsPlayers([]);
       return;
     }
     const unsubscribes = allRootsLevel2.map(l2 => {
       const q = query(collection(db, `tournaments/${tournamentId}/roots/${l2.rootId}/level1/${l2.level1Id}/level2/${l2.id}/players`));
       return onSnapshot(q, (snapshot) => {
-        setAllRootsPlayers(prev => {
+        setRawRootsPlayers(prev => {
           const filtered = prev.filter(item => item.level2Id !== l2.id);
           const newItems = snapshot.docs.map(doc => ({ 
             id: doc.id, 
@@ -251,6 +302,25 @@ export default function MatchScoreManager({
     return () => unsubscribes.forEach(unsub => unsub());
   }, [allRootsLevel2, tournamentId]);
 
+  const allRootsPlayers = useMemo(() => {
+    const level1Map = new Map(allRootsLevel1.map(l1 => [l1.id, l1]));
+    const level2Map = new Map(allRootsLevel2.map(l2 => [l2.id, l2]));
+    const rootMap = new Map(roots.map(r => [r.id, r]));
+
+    return rawRootsPlayers.map(ap => {
+      const l2 = level2Map.get(ap.level2Id) as any;
+      const l1 = level1Map.get(ap.level1Id || (l2 ? l2.level1Id : '')) as any;
+      const r = rootMap.get(ap.rootId || (l1 ? l1.rootId : '')) as any;
+      return {
+        ...ap,
+        level2Name: l2 ? l2.name : ap.level2Name,
+        level1Name: l1 ? l1.name : ap.level1Name,
+        rootName: r ? r.name : ap.rootName,
+      };
+    });
+  }, [rawRootsPlayers, allRootsLevel2, allRootsLevel1, roots]);
+
+  const playerL1Map = Object.fromEntries(allRootsPlayers.map(ap => [ap.id, ap.level1Name]));
   const playerL2Map = Object.fromEntries(allRootsPlayers.map(ap => [ap.id, ap.level2Name]));
 
   // Helper to check if a set is completed by professional rules
@@ -785,6 +855,19 @@ export default function MatchScoreManager({
     
     let y = 52;
     
+    const getPlayerDetailsWithHierarchy = (name: string, playerId: string) => {
+      if (!playerId) return name;
+      const l2 = playerL2Map[playerId];
+      const l1 = playerL1Map[playerId];
+      const parts = [];
+      if (l1) parts.push(l1);
+      if (l2) parts.push(l2);
+      if (parts.length > 0) {
+        return `${name} (${parts.join('/')})`;
+      }
+      return name;
+    };
+
     // Group fixtures by group name
     const groupedFixtures = filteredFixtures.reduce((acc, f) => {
       const gName = f.groupName || 'Other / Playoff Stages';
@@ -821,9 +904,9 @@ export default function MatchScoreManager({
       doc.setFont("helvetica", "bold");
       doc.text("Match ID", 14, y);
       doc.text("Player/Team 1", 35, y);
-      doc.text("Player/Team 2", 95, y);
-      doc.text("Status", 155, y);
-      doc.text("Scores", 175, y);
+      doc.text("Player/Team 2", 110, y);
+      doc.text("Status", 165, y);
+      doc.text("Scores", 182, y);
       
       y += 3;
       doc.line(14, y, 196, y);
@@ -843,21 +926,21 @@ export default function MatchScoreManager({
         
         // P1 string
         const p1Name = f.isDoubles
-          ? `${f.player1aName || 'N/A'} & ${f.player1bName || 'N/A'}`
-          : (f.player1Name || 'N/A');
-        const truncatedP1 = p1Name.length > 28 ? p1Name.substring(0, 26) + ".." : p1Name;
+          ? `${getPlayerDetailsWithHierarchy(f.player1aName || 'N/A', f.player1aId)} & ${getPlayerDetailsWithHierarchy(f.player1bName || 'N/A', f.player1bId)}`
+          : getPlayerDetailsWithHierarchy(f.player1Name || 'N/A', f.player1Id);
+        const truncatedP1 = p1Name.length > 40 ? p1Name.substring(0, 38) + ".." : p1Name;
         doc.text(truncatedP1, 35, y);
         
         // P2 string
         const p2Name = f.isDoubles
-          ? `${f.player2aName || 'N/A'} & ${f.player2bName || 'N/A'}`
-          : (f.player2Name || 'N/A');
-        const truncatedP2 = p2Name.length > 28 ? p2Name.substring(0, 26) + ".." : p2Name;
-        doc.text(truncatedP2, 95, y);
+          ? `${getPlayerDetailsWithHierarchy(f.player2aName || 'N/A', f.player2aId)} & ${getPlayerDetailsWithHierarchy(f.player2bName || 'N/A', f.player2bId)}`
+          : getPlayerDetailsWithHierarchy(f.player2Name || 'N/A', f.player2Id);
+        const truncatedP2 = p2Name.length > 40 ? p2Name.substring(0, 38) + ".." : p2Name;
+        doc.text(truncatedP2, 110, y);
         
         // Status
         const statusStr = f.status === 'completed' ? 'Completed' : (f.status === 'live' ? 'LIVE' : 'Upcoming');
-        doc.text(statusStr, 155, y);
+        doc.text(statusStr, 165, y);
         
         // Scores
         let scoreStr = "-";
@@ -948,6 +1031,18 @@ export default function MatchScoreManager({
               })}
             </div>
           </div>
+
+          {canScore && (
+            <div className="bg-indigo-50/80 border border-indigo-100/80 text-indigo-900 rounded-2xl p-4 flex items-start gap-3 shadow-xs">
+              <Info className="w-5 h-5 text-indigo-600 mt-0.5 shrink-0" />
+              <div>
+                <h4 className="text-sm font-bold text-indigo-950">Drag & Drop Match Numbers</h4>
+                <p className="text-xs text-indigo-800/90 mt-0.5">
+                  You can drag and drop any match card onto another card to swap their match numbers and easily update your tournament match order in real time.
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Filters and Search Bar */}
           <div className="flex flex-col md:flex-row gap-4 items-stretch md:items-center justify-between">
@@ -1068,15 +1163,34 @@ export default function MatchScoreManager({
                   ? (f.player2bName ? `${f.player2aName} & ${f.player2bName}` : f.player2aName)
                   : f.player2Name;
 
+                const isDragged = draggedFixture?.id === f.id;
+                const isOver = isDraggingOverId === f.id;
+
                 return (
                   <div 
                     key={f.id} 
-                    className={`bg-white border border-slate-150/80 rounded-2xl shadow-xs hover:shadow-md hover:border-slate-300 transition-all p-3.5 flex flex-col justify-between min-h-[195px] h-auto border-l-4 ${statusAccent}`}
+                    draggable={canScore}
+                    onDragStart={(e) => handleDragStart(e, f)}
+                    onDragOver={(e) => handleDragOver(e, f.id)}
+                    onDragLeave={handleDragLeave}
+                    onDrop={(e) => handleDrop(e, f)}
+                    className={`bg-white border border-slate-150/80 rounded-2xl shadow-xs hover:shadow-md hover:border-slate-300 transition-all p-3.5 flex flex-col justify-between min-h-[195px] h-auto border-l-4 ${statusAccent} ${
+                      canScore ? 'cursor-grab active:cursor-grabbing' : ''
+                    } ${
+                      isDragged ? 'opacity-30 scale-[0.97]' : ''
+                    } ${
+                      isOver ? 'ring-2 ring-indigo-500 ring-offset-2 border-indigo-400 scale-[1.02] bg-indigo-50/5 shadow-lg' : ''
+                    }`}
                   >
                     {/* Card Top: Match Info */}
                     <div className="flex justify-between items-start gap-1.5">
                       <div className="space-y-0.5 min-w-0 flex-1">
                         <div className="flex items-center gap-1.5 flex-wrap">
+                          {canScore && (
+                            <div className="text-slate-400 hover:text-indigo-500 transition cursor-grab active:cursor-grabbing p-0.5" title="Drag to swap match numbers">
+                              <GripVertical className="w-3.5 h-3.5 shrink-0" />
+                            </div>
+                          )}
                           {f.matchNumber && (
                             <span className="text-[12px] font-black text-indigo-700 bg-indigo-100/50 border border-indigo-200 px-2 py-0.5 rounded-md">
                               #{f.matchNumber}
@@ -1120,23 +1234,40 @@ export default function MatchScoreManager({
                           </span>
                           {f.isDoubles ? (
                             <div className="flex flex-wrap gap-1 mt-0.5">
+                              {playerL1Map[f.player1aId] && (
+                                <span className="text-[9px] text-indigo-600 font-semibold truncate bg-indigo-50/70 px-1 py-0.25 rounded self-start border border-indigo-100/50" title={playerL1Map[f.player1aId]}>
+                                  {playerL1Map[f.player1aId]}
+                                </span>
+                              )}
                               {playerL2Map[f.player1aId] && (
-                                <span className="text-[9px] text-indigo-600/90 font-semibold truncate bg-indigo-50/50 px-1 py-0.25 rounded self-start" title={playerL2Map[f.player1aId]}>
+                                <span className="text-[9px] text-emerald-600 font-semibold truncate bg-emerald-50/70 px-1 py-0.25 rounded self-start border border-emerald-100/50" title={playerL2Map[f.player1aId]}>
                                   {playerL2Map[f.player1aId]}
                                 </span>
                               )}
+                              {playerL1Map[f.player1bId] && playerL1Map[f.player1bId] !== playerL1Map[f.player1aId] && (
+                                <span className="text-[9px] text-indigo-600 font-semibold truncate bg-indigo-50/70 px-1 py-0.25 rounded self-start border border-indigo-100/50" title={playerL1Map[f.player1bId]}>
+                                  {playerL1Map[f.player1bId]}
+                                </span>
+                              )}
                               {playerL2Map[f.player1bId] && playerL2Map[f.player1bId] !== playerL2Map[f.player1aId] && (
-                                <span className="text-[9px] text-indigo-600/90 font-semibold truncate bg-indigo-50/50 px-1 py-0.25 rounded self-start" title={playerL2Map[f.player1bId]}>
+                                <span className="text-[9px] text-emerald-600 font-semibold truncate bg-emerald-50/70 px-1 py-0.25 rounded self-start border border-emerald-100/50" title={playerL2Map[f.player1bId]}>
                                   {playerL2Map[f.player1bId]}
                                 </span>
                               )}
                             </div>
                           ) : (
-                            playerL2Map[f.player1Id] && (
-                              <span className="text-[9px] text-indigo-600/90 font-semibold truncate mt-0.5 bg-indigo-50/50 px-1 py-0.25 rounded self-start" title={playerL2Map[f.player1Id]}>
-                                {playerL2Map[f.player1Id]}
-                              </span>
-                            )
+                            <div className="flex flex-wrap gap-1 mt-0.5">
+                              {playerL1Map[f.player1Id] && (
+                                <span className="text-[9px] text-indigo-600 font-semibold truncate bg-indigo-50/70 px-1 py-0.25 rounded self-start border border-indigo-100/50" title={playerL1Map[f.player1Id]}>
+                                  {playerL1Map[f.player1Id]}
+                                </span>
+                              )}
+                              {playerL2Map[f.player1Id] && (
+                                <span className="text-[9px] text-emerald-600 font-semibold truncate bg-emerald-50/70 px-1 py-0.25 rounded self-start border border-emerald-100/50" title={playerL2Map[f.player1Id]}>
+                                  {playerL2Map[f.player1Id]}
+                                </span>
+                              )}
+                            </div>
                           )}
                         </div>
                         {/* Scores displays */}
@@ -1182,23 +1313,40 @@ export default function MatchScoreManager({
                           </span>
                           {f.isDoubles ? (
                             <div className="flex flex-wrap gap-1 mt-0.5">
+                              {playerL1Map[f.player2aId] && (
+                                <span className="text-[9px] text-indigo-600 font-semibold truncate bg-indigo-50/70 px-1 py-0.25 rounded self-start border border-indigo-100/50" title={playerL1Map[f.player2aId]}>
+                                  {playerL1Map[f.player2aId]}
+                                </span>
+                              )}
                               {playerL2Map[f.player2aId] && (
-                                <span className="text-[9px] text-indigo-600/90 font-semibold truncate bg-indigo-50/50 px-1 py-0.25 rounded self-start" title={playerL2Map[f.player2aId]}>
+                                <span className="text-[9px] text-emerald-600 font-semibold truncate bg-emerald-50/70 px-1 py-0.25 rounded self-start border border-emerald-100/50" title={playerL2Map[f.player2aId]}>
                                   {playerL2Map[f.player2aId]}
                                 </span>
                               )}
+                              {playerL1Map[f.player2bId] && playerL1Map[f.player2bId] !== playerL1Map[f.player2aId] && (
+                                <span className="text-[9px] text-indigo-600 font-semibold truncate bg-indigo-50/70 px-1 py-0.25 rounded self-start border border-indigo-100/50" title={playerL1Map[f.player2bId]}>
+                                  {playerL1Map[f.player2bId]}
+                                </span>
+                              )}
                               {playerL2Map[f.player2bId] && playerL2Map[f.player2bId] !== playerL2Map[f.player2aId] && (
-                                <span className="text-[9px] text-indigo-600/90 font-semibold truncate bg-indigo-50/50 px-1 py-0.25 rounded self-start" title={playerL2Map[f.player2bId]}>
+                                <span className="text-[9px] text-emerald-600 font-semibold truncate bg-emerald-50/70 px-1 py-0.25 rounded self-start border border-emerald-100/50" title={playerL2Map[f.player2bId]}>
                                   {playerL2Map[f.player2bId]}
                                 </span>
                               )}
                             </div>
                           ) : (
-                            playerL2Map[f.player2Id] && (
-                              <span className="text-[9px] text-indigo-600/90 font-semibold truncate mt-0.5 bg-indigo-50/50 px-1 py-0.25 rounded self-start" title={playerL2Map[f.player2Id]}>
-                                {playerL2Map[f.player2Id]}
-                              </span>
-                            )
+                            <div className="flex flex-wrap gap-1 mt-0.5">
+                              {playerL1Map[f.player2Id] && (
+                                <span className="text-[9px] text-indigo-600 font-semibold truncate bg-indigo-50/70 px-1 py-0.25 rounded self-start border border-indigo-100/50" title={playerL1Map[f.player2Id]}>
+                                  {playerL1Map[f.player2Id]}
+                                </span>
+                              )}
+                              {playerL2Map[f.player2Id] && (
+                                <span className="text-[9px] text-emerald-600 font-semibold truncate bg-emerald-50/70 px-1 py-0.25 rounded self-start border border-emerald-100/50" title={playerL2Map[f.player2Id]}>
+                                  {playerL2Map[f.player2Id]}
+                                </span>
+                              )}
+                            </div>
                           )}
                         </div>
                         {/* Scores displays */}

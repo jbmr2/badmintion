@@ -120,20 +120,72 @@ export default function PointsTable({
     }
   };
 
+  // Compile unique pairs from players for manual doubles seeding
+  const registeredPairs: Array<{ id: string; name: string; pA: any; pB: any }> = [];
+  const pairMapAccumulator = new Map<string, any[]>();
+  players.forEach(p => {
+    if (p.pairId) {
+      if (!pairMapAccumulator.has(p.pairId)) {
+        pairMapAccumulator.set(p.pairId, []);
+      }
+      pairMapAccumulator.get(p.pairId)!.push(p);
+    }
+  });
+  pairMapAccumulator.forEach((pts, pid) => {
+    if (pts.length >= 1) {
+      const pA = pts[0];
+      const pB = pts[1] || { id: '', name: 'No Partner' };
+      registeredPairs.push({
+        id: pid,
+        name: pB.id ? `${pA.name} & ${pB.name}` : pA.name,
+        pA,
+        pB
+      });
+    }
+  });
+
   // Hierarchy tracking states for L2 Data
   const [roots, setRoots] = useState<any[]>([]);
   const [allRootsLevel1, setAllRootsLevel1] = useState<any[]>([]);
   const [allRootsLevel2, setAllRootsLevel2] = useState<any[]>([]);
-  const [allRootsPlayers, setAllRootsPlayers] = useState<any[]>([]);
+  const [rawRootsPlayers, setRawRootsPlayers] = useState<any[]>([]);
 
   const isStructureMaster = tournamentId !== '_master_' && (roots.length === 0 || roots.some(r => r.isMasterFallback));
   const structureTournamentId = isStructureMaster ? '_master_' : tournamentId;
+
+  const allRootsPlayers = useMemo(() => {
+    const level1Map = new Map(allRootsLevel1.map(l1 => [l1.id, l1]));
+    const level2Map = new Map(allRootsLevel2.map(l2 => [l2.id, l2]));
+    const rootMap = new Map(roots.map(r => [r.id, r]));
+
+    return rawRootsPlayers.map(ap => {
+      const l2 = level2Map.get(ap.level2Id) as any;
+      const l1 = level1Map.get(ap.level1Id || (l2 ? l2.level1Id : '')) as any;
+      const r = rootMap.get(ap.rootId || (l1 ? l1.rootId : '')) as any;
+      return {
+        ...ap,
+        level2Name: l2 ? l2.name : ap.level2Name,
+        level1Name: l1 ? l1.name : ap.level1Name,
+        rootName: r ? r.name : ap.rootName,
+      };
+    });
+  }, [rawRootsPlayers, allRootsLevel2, allRootsLevel1, roots]);
 
   // Manual scheduling state
   const [selectedP1, setSelectedP1] = useState('');
   const [selectedP2, setSelectedP2] = useState('');
   const [selectedStage, setSelectedStage] = useState<'pre_quarter' | 'quarter' | 'semi' | 'final'>('quarter');
   const [pointsTarget, setPointsTarget] = useState('21');
+
+  // Manual doubles bracket states
+  const [manualIsDoubles, setManualIsDoubles] = useState(false);
+  const [selectedPair1, setSelectedPair1] = useState('');
+  const [selectedPair2, setSelectedPair2] = useState('');
+  const [selectedP1a, setSelectedP1a] = useState('');
+  const [selectedP1b, setSelectedP1b] = useState('');
+  const [selectedP2a, setSelectedP2a] = useState('');
+  const [selectedP2b, setSelectedP2b] = useState('');
+  const [doublesSelectionMode, setDoublesSelectionMode] = useState<'pair' | 'custom'>('pair');
 
   // Fetch roots, level1s, level2s, and players assignments for L2 Data
   useEffect(() => {
@@ -198,13 +250,13 @@ export default function PointsTable({
 
   useEffect(() => {
     if (allRootsLevel2.length === 0 || !tournamentId) {
-      setAllRootsPlayers([]);
+      setRawRootsPlayers([]);
       return;
     }
     const unsubscribes = allRootsLevel2.map(l2 => {
       const q = query(collection(db, `tournaments/${tournamentId}/roots/${l2.rootId}/level1/${l2.level1Id}/level2/${l2.id}/players`));
       return onSnapshot(q, (snapshot) => {
-        setAllRootsPlayers(prev => {
+        setRawRootsPlayers(prev => {
           const filtered = prev.filter(item => item.level2Id !== l2.id);
           const newItems = snapshot.docs.map(doc => ({ 
             id: doc.id, 
@@ -1039,28 +1091,111 @@ export default function PointsTable({
 
   // Schedule a custom knockout match manually
   const scheduleKnockoutManual = async () => {
-    if (!selectedP1 || !selectedP2 || selectedP1 === selectedP2) {
-      alert("Please select two distinct players to schedule.");
-      return;
-    }
     try {
       setGenerating(true);
       const stageLabels = { pre_quarter: 'Pre-Quarters', quarter: 'Quarter Finals', semi: 'Semi Finals', final: 'Finals' };
-      const docRef = await addDoc(collection(db, `tournaments/${tournamentId}/fixtures`), {
-        player1Id: selectedP1,
-        player1Name: playerMap[selectedP1],
-        player2Id: selectedP2,
-        player2Name: playerMap[selectedP2],
-        groupName: stageLabels[selectedStage],
+      const groupName = stageLabels[selectedStage] || 'Knockout';
+
+      let fixtureData: any = {
+        groupName,
         matchType: selectedStage,
         pointsTarget: pointsTarget,
         status: 'pending',
         scores: { p1g1: 0, p2g1: 0, p1g2: 0, p2g2: 0, p1g3: 0, p2g3: 0 }
-      });
+      };
+
+      if (manualIsDoubles) {
+        fixtureData.isDoubles = true;
+        let p1a = '', p1b = '', p2a = '', p2b = '';
+
+        if (doublesSelectionMode === 'pair') {
+          if (!selectedPair1 || !selectedPair2 || selectedPair1 === selectedPair2) {
+            alert("Please select two distinct doubles pairs.");
+            setGenerating(false);
+            return;
+          }
+          // Find players for pair 1
+          const pair1Players = players.filter(p => p.pairId === selectedPair1);
+          if (pair1Players.length === 0) {
+            alert("Could not find players for the selected Team 1 pair.");
+            setGenerating(false);
+            return;
+          }
+          p1a = pair1Players[0].id;
+          p1b = pair1Players[1]?.id || '';
+
+          // Find players for pair 2
+          const pair2Players = players.filter(p => p.pairId === selectedPair2);
+          if (pair2Players.length === 0) {
+            alert("Could not find players for the selected Team 2 pair.");
+            setGenerating(false);
+            return;
+          }
+          p2a = pair2Players[0].id;
+          p2b = pair2Players[1]?.id || '';
+        } else {
+          // Custom selection
+          if (!selectedP1a || !selectedP2a) {
+            alert("Both teams must have at least one main player (Player A).");
+            setGenerating(false);
+            return;
+          }
+          p1a = selectedP1a;
+          p1b = selectedP1b;
+          p2a = selectedP2a;
+          p2b = selectedP2b;
+
+          // Check for duplicates
+          const selectedIds = [p1a, p1b, p2a, p2b].filter(Boolean);
+          const uniqueIds = new Set(selectedIds);
+          if (selectedIds.length !== uniqueIds.size) {
+            alert("The same player cannot be selected multiple times in the same match.");
+            setGenerating(false);
+            return;
+          }
+        }
+
+        // Assign fields
+        fixtureData.player1aId = p1a;
+        fixtureData.player1aName = playerMap[p1a] || '';
+        fixtureData.player1bId = p1b;
+        fixtureData.player1bName = playerMap[p1b] || '';
+        fixtureData.player2aId = p2a;
+        fixtureData.player2aName = playerMap[p2a] || '';
+        fixtureData.player2bId = p2b;
+        fixtureData.player2bName = playerMap[p2b] || '';
+
+        // For backward compatibility / standard views fallback
+        fixtureData.player1Id = p1a;
+        fixtureData.player1Name = p1b ? `${playerMap[p1a]} & ${playerMap[p1b]}` : playerMap[p1a];
+        fixtureData.player2Id = p2a;
+        fixtureData.player2Name = p2b ? `${playerMap[p2a]} & ${playerMap[p2b]}` : playerMap[p2a];
+      } else {
+        // Singles match
+        if (!selectedP1 || !selectedP2 || selectedP1 === selectedP2) {
+          alert("Please select two distinct players to schedule.");
+          setGenerating(false);
+          return;
+        }
+        fixtureData.isDoubles = false;
+        fixtureData.player1Id = selectedP1;
+        fixtureData.player1Name = playerMap[selectedP1] || '';
+        fixtureData.player2Id = selectedP2;
+        fixtureData.player2Name = playerMap[selectedP2] || '';
+      }
+
+      const docRef = await addDoc(collection(db, `tournaments/${tournamentId}/fixtures`), fixtureData);
       await updateDoc(docRef, { matchId: generateShortId() });
       
+      // Reset states
       setSelectedP1('');
       setSelectedP2('');
+      setSelectedP1a('');
+      setSelectedP1b('');
+      setSelectedP2a('');
+      setSelectedP2b('');
+      setSelectedPair1('');
+      setSelectedPair2('');
       setActiveTab('brackets');
     } catch (e) {
       console.error("Error scheduling knockout manual match:", e);
@@ -2805,86 +2940,255 @@ export default function PointsTable({
               </div>
 
               {/* Right Column: Custom Seeding Manual Selections */}
-              <div className="bg-white border border-slate-100 rounded-3xl p-6 shadow-sm space-y-4">
-                <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
-                  <Plus className="w-5 h-5 text-indigo-600" />
-                  <h3 className="font-extrabold text-base text-slate-800">Manual Stage Bracket Seeder</h3>
+              <div className="bg-white border border-slate-100 rounded-3xl p-6 shadow-sm space-y-5">
+                <div className="flex items-center gap-2 border-b border-slate-100 pb-3 justify-between">
+                  <div className="flex items-center gap-2">
+                    <Plus className="w-5 h-5 text-indigo-600" />
+                    <h3 className="font-extrabold text-base text-slate-800">Manual Stage Bracket Seeder</h3>
+                  </div>
                 </div>
 
-                <div className="space-y-4">
-                  {/* Player 1 Selection */}
-                  <div className="space-y-1.5 text-left">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Select Opponent 1</label>
-                    <select 
-                      value={selectedP1} 
-                      onChange={e => setSelectedP1(e.target.value)} 
-                      className="w-full border border-slate-200 p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                {/* Format Toggle: Singles vs Doubles */}
+                <div className="space-y-1.5 text-left">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Match Format</label>
+                  <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl">
+                    <button
+                      type="button"
+                      onClick={() => setManualIsDoubles(false)}
+                      className={`py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                        !manualIsDoubles 
+                          ? 'bg-white text-slate-800 shadow-xs' 
+                          : 'text-slate-500 hover:text-slate-800'
+                      }`}
                     >
-                      <option value="">Choose Player/Team</option>
-                      {players.map(p => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Player 2 Selection */}
-                  <div className="space-y-1.5 text-left">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Select Opponent 2</label>
-                    <select 
-                      value={selectedP2} 
-                      onChange={e => setSelectedP2(e.target.value)} 
-                      className="w-full border border-slate-200 p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                      👤 Singles
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setManualIsDoubles(true)}
+                      className={`py-2 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                        manualIsDoubles 
+                          ? 'bg-white text-slate-800 shadow-xs' 
+                          : 'text-slate-500 hover:text-slate-800'
+                      }`}
                     >
-                      <option value="">Choose Player/Team</option>
-                      {players.map(p => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </select>
+                      👥 Doubles / Mixed
+                    </button>
                   </div>
+                </div>
 
-                  {/* Stage & Target Point Grid */}
-                  <div className="grid grid-cols-2 gap-3">
+                {manualIsDoubles && (
+                  <div className="space-y-3">
+                    {/* Doubles Mode Selector */}
+                    <div className="flex gap-4 border-b border-slate-100 pb-2">
+                      <button
+                        type="button"
+                        onClick={() => setDoublesSelectionMode('pair')}
+                        className={`text-xs font-extrabold pb-1 border-b-2 transition cursor-pointer ${
+                          doublesSelectionMode === 'pair' 
+                            ? 'border-indigo-600 text-indigo-600' 
+                            : 'border-transparent text-slate-400 hover:text-slate-600'
+                        }`}
+                      >
+                        Select Registered Pairs
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDoublesSelectionMode('custom')}
+                        className={`text-xs font-extrabold pb-1 border-b-2 transition cursor-pointer ${
+                          doublesSelectionMode === 'custom' 
+                            ? 'border-indigo-600 text-indigo-600' 
+                            : 'border-transparent text-slate-400 hover:text-slate-600'
+                        }`}
+                      >
+                        Custom Pair Combo
+                      </button>
+                    </div>
+
+                    {doublesSelectionMode === 'pair' ? (
+                      <div className="space-y-3.5">
+                        {/* Team 1 Pair Selection */}
+                        <div className="space-y-1.5 text-left">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Select Opponent Team 1</label>
+                          <select 
+                            value={selectedPair1} 
+                            onChange={e => setSelectedPair1(e.target.value)} 
+                            className="w-full border border-slate-200 p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                          >
+                            <option value="">Choose Team (Pair)</option>
+                            {registeredPairs.map(pair => (
+                              <option key={pair.id} value={pair.id}>
+                                {pair.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {/* Team 2 Pair Selection */}
+                        <div className="space-y-1.5 text-left">
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Select Opponent Team 2</label>
+                          <select 
+                            value={selectedPair2} 
+                            onChange={e => setSelectedPair2(e.target.value)} 
+                            className="w-full border border-slate-200 p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                          >
+                            <option value="">Choose Team (Pair)</option>
+                            {registeredPairs.map(pair => (
+                              <option key={pair.id} value={pair.id}>
+                                {pair.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {/* Custom Team 1 Selections */}
+                        <div className="p-3 bg-slate-50 rounded-2xl border border-slate-150 space-y-3">
+                          <span className="text-[10px] font-black text-indigo-600 uppercase tracking-wider block">Opponent Team 1</span>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="space-y-1 text-left">
+                              <label className="text-[9px] font-bold text-slate-400 block">Player A</label>
+                              <select 
+                                value={selectedP1a} 
+                                onChange={e => setSelectedP1a(e.target.value)} 
+                                className="w-full border border-slate-200 p-2 rounded-lg bg-white font-bold text-xs"
+                              >
+                                <option value="">Select...</option>
+                                {players.map(p => (
+                                  <option key={p.id} value={p.id}>{p.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="space-y-1 text-left">
+                              <label className="text-[9px] font-bold text-slate-400 block">Player B</label>
+                              <select 
+                                value={selectedP1b} 
+                                onChange={e => setSelectedP1b(e.target.value)} 
+                                className="w-full border border-slate-200 p-2 rounded-lg bg-white font-bold text-xs"
+                              >
+                                <option value="">Select...</option>
+                                {players.map(p => (
+                                  <option key={p.id} value={p.id}>{p.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Custom Team 2 Selections */}
+                        <div className="p-3 bg-slate-50 rounded-2xl border border-slate-150 space-y-3">
+                          <span className="text-[10px] font-black text-indigo-600 uppercase tracking-wider block">Opponent Team 2</span>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="space-y-1 text-left">
+                              <label className="text-[9px] font-bold text-slate-400 block">Player A</label>
+                              <select 
+                                value={selectedP2a} 
+                                onChange={e => setSelectedP2a(e.target.value)} 
+                                className="w-full border border-slate-200 p-2 rounded-lg bg-white font-bold text-xs"
+                              >
+                                <option value="">Select...</option>
+                                {players.map(p => (
+                                  <option key={p.id} value={p.id}>{p.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="space-y-1 text-left">
+                              <label className="text-[9px] font-bold text-slate-400 block">Player B</label>
+                              <select 
+                                value={selectedP2b} 
+                                onChange={e => setSelectedP2b(e.target.value)} 
+                                className="w-full border border-slate-200 p-2 rounded-lg bg-white font-bold text-xs"
+                              >
+                                <option value="">Select...</option>
+                                {players.map(p => (
+                                  <option key={p.id} value={p.id}>{p.name}</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {!manualIsDoubles && (
+                  <div className="space-y-4">
+                    {/* Player 1 Selection */}
                     <div className="space-y-1.5 text-left">
-                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Knockout Stage</label>
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Select Opponent 1</label>
                       <select 
-                        value={selectedStage} 
-                        onChange={e => setSelectedStage(e.target.value as any)} 
+                        value={selectedP1} 
+                        onChange={e => setSelectedP1(e.target.value)} 
                         className="w-full border border-slate-200 p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
                       >
-                        <option value="pre_quarter">Pre-Quarter</option>
-                        <option value="quarter">Quarter Final</option>
-                        <option value="semi">Semi Final</option>
-                        <option value="final">Final</option>
+                        <option value="">Choose Player/Team</option>
+                        {players.map(p => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
                       </select>
                     </div>
 
+                    {/* Player 2 Selection */}
                     <div className="space-y-1.5 text-left">
-                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Points Target</label>
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Select Opponent 2</label>
                       <select 
-                        value={pointsTarget} 
-                        onChange={e => setPointsTarget(e.target.value)} 
+                        value={selectedP2} 
+                        onChange={e => setSelectedP2(e.target.value)} 
                         className="w-full border border-slate-200 p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
                       >
-                        <option value="11">11 Points</option>
-                        <option value="15">15 Points</option>
-                        <option value="21">21 Points</option>
+                        <option value="">Choose Player/Team</option>
+                        {players.map(p => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
                       </select>
                     </div>
                   </div>
+                )}
 
-                  {/* Submit button */}
-                  <button
-                    onClick={scheduleKnockoutManual}
-                    disabled={generating}
-                    className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs rounded-xl shadow-md transition flex items-center justify-center gap-1.5"
-                  >
-                    <Plus className="w-4 h-4" /> Create Custom Stage Fixture
-                  </button>
+                {/* Stage & Target Point Grid */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5 text-left">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Knockout Stage</label>
+                    <select 
+                      value={selectedStage} 
+                      onChange={e => setSelectedStage(e.target.value as any)} 
+                      className="w-full border border-slate-200 p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                    >
+                      <option value="pre_quarter">Pre-Quarter</option>
+                      <option value="quarter">Quarter Final</option>
+                      <option value="semi">Semi Final</option>
+                      <option value="final">Final</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1.5 text-left">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Points Target</label>
+                    <select 
+                      value={pointsTarget} 
+                      onChange={e => setPointsTarget(e.target.value)} 
+                      className="w-full border border-slate-200 p-3 rounded-xl focus:ring-2 focus:ring-indigo-500 font-bold text-xs"
+                    >
+                      <option value="11">11 Points</option>
+                      <option value="15">15 Points</option>
+                      <option value="21">21 Points</option>
+                    </select>
+                  </div>
                 </div>
+
+                {/* Submit button */}
+                <button
+                  onClick={scheduleKnockoutManual}
+                  disabled={generating}
+                  className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs rounded-xl shadow-md transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  <Plus className="w-4 h-4" /> Create Custom Stage Fixture
+                </button>
               </div>
 
             </div>

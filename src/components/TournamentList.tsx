@@ -23,6 +23,7 @@ export default function TournamentList({
   const [tournamentToDelete, setTournamentToDelete] = useState<any | null>(null);
   const [qrCodeTournament, setQrCodeTournament] = useState<any | null>(null);
   const [statusFilter, setStatusFilter] = useState<'all' | 'live' | 'upcoming' | 'completed'>('all');
+  const [categoryFilter, setCategoryFilter] = useState<'all' | 'mens' | 'womens' | 'kids' | 'doubles' | 'mixed'>('all');
 
   useEffect(() => {
     const q = query(collection(db, 'tournaments'));
@@ -52,6 +53,32 @@ export default function TournamentList({
     .filter(t => {
       if (statusFilter === 'all') return true;
       return getTournamentStatus(t) === statusFilter;
+    })
+    .filter(t => {
+      if (categoryFilter === 'all') return true;
+      const cats = t.categories || [];
+      if (!Array.isArray(cats) || cats.length === 0) return false;
+      
+      const filterLower = categoryFilter.toLowerCase();
+      return cats.some((cat: string) => {
+        const catLower = cat.toLowerCase();
+        if (filterLower === 'mens') {
+          return catLower.includes('mens') || catLower.includes('men\'s') || catLower.includes('men ');
+        }
+        if (filterLower === 'womens') {
+          return catLower.includes('womens') || catLower.includes('women\'s') || catLower.includes('women ');
+        }
+        if (filterLower === 'kids') {
+          return catLower.includes('kids') || catLower.includes('under');
+        }
+        if (filterLower === 'doubles') {
+          return catLower.includes('doubles') || catLower.includes('double');
+        }
+        if (filterLower === 'mixed') {
+          return catLower.includes('mixed') || catLower.includes('mix');
+        }
+        return false;
+      });
     });
 
   return (
@@ -79,16 +106,48 @@ export default function TournamentList({
         </div>
       </div>
       
-      <div className="flex w-full p-1 bg-white border border-slate-200 rounded-xl overflow-x-auto whitespace-nowrap self-start">
-        {(['all', 'live', 'upcoming', 'completed'] as const).map(filter => (
-          <button
-            key={filter}
-            onClick={() => setStatusFilter(filter)}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition capitalize ${statusFilter === filter ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'}`}
-          >
-            {filter}
-          </button>
-        ))}
+      <div className="flex flex-col md:flex-row gap-4 items-stretch md:items-center">
+        <div className="flex-1 space-y-2">
+          <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block">Filter by Status</label>
+          <div className="flex p-1 bg-white border border-slate-200 rounded-xl overflow-x-auto whitespace-nowrap self-start">
+            {(['all', 'live', 'upcoming', 'completed'] as const).map(filter => (
+              <button
+                key={filter}
+                onClick={() => setStatusFilter(filter)}
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition capitalize cursor-pointer ${statusFilter === filter ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'}`}
+              >
+                {filter}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex-2 space-y-2">
+          <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block">Filter by Division / Category</label>
+          <div className="flex p-1 bg-white border border-slate-200 rounded-xl overflow-x-auto whitespace-nowrap self-start">
+            {[
+              { id: 'all', label: 'All', icon: '🏆' },
+              { id: 'mens', label: "Men's", icon: '👨' },
+              { id: 'womens', label: "Women's", icon: '👩' },
+              { id: 'kids', label: "Kids", icon: '🧒' },
+              { id: 'doubles', label: "Doubles", icon: '👥' },
+              { id: 'mixed', label: "Mixed", icon: '🔄' }
+            ].map(item => (
+              <button
+                key={item.id}
+                onClick={() => setCategoryFilter(item.id as any)}
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  categoryFilter === item.id 
+                    ? 'bg-indigo-600 text-white shadow-md' 
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+              >
+                <span>{item.icon}</span>
+                <span>{item.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
       
       {displayedTournaments.length === 0 ? (

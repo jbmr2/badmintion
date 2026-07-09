@@ -10,7 +10,10 @@ import {
   setDoc, 
   updateDoc, 
   deleteDoc,
-  getDoc
+  getDoc,
+  where,
+  getDocs,
+  limit
 } from 'firebase/firestore';
 import { 
   User, 
@@ -135,10 +138,21 @@ export default function PlayerManager({
       }
       setIsSearchingMobile(true);
       try {
+        let data = null;
         const docRef = doc(db, 'players', cleaned);
         const docSnap = await getDoc(docRef);
         if (docSnap.exists()) {
-          const data = docSnap.data();
+          data = docSnap.data();
+        } else {
+          // Fallback: Query collection by 'mobile' field
+          const qGlobal = query(collection(db, 'players'), where('mobile', '==', cleaned), limit(1));
+          const qSnap = await getDocs(qGlobal);
+          if (!qSnap.empty) {
+            data = qSnap.docs[0].data();
+          }
+        }
+
+        if (data) {
           const master = {
             name: data.name || '',
             age: data.age !== undefined && data.age !== null ? String(data.age) : '',
@@ -297,30 +311,62 @@ export default function PlayerManager({
   const handleAdd = async () => {
     if (!player.name.trim()) return;
     
-    const mobileTrimmed = player.mobile.trim();
+    const mobileTrimmed = player.mobile.trim().replace(/[^0-9+]/g, '');
     if (!mobileTrimmed) {
       alert("Mobile number is required as a unique player ID.");
       return;
     }
 
     // Uniqueness validation
-    const isMobileDuplicate = players.some(p => p.mobile && p.mobile.trim() === mobileTrimmed);
+    const isMobileDuplicate = players.some(p => p.mobile && p.mobile.trim().replace(/[^0-9+]/g, '') === mobileTrimmed);
     if (isMobileDuplicate) {
       alert("This mobile number is already registered for another player. Mobile numbers must be unique.");
       return;
     }
 
+    let partnerMobileCleaned = "";
+    if (isDoublesMode) {
+      if (!partnerName.trim() || !partnerMobile.trim()) {
+        alert("Partner details are required for doubles registration.");
+        return;
+      }
+      partnerMobileCleaned = partnerMobile.trim().replace(/[^0-9+]/g, '');
+      if (!partnerMobileCleaned) {
+        alert("Partner mobile number is required as a unique player ID.");
+        return;
+      }
+      if (partnerMobileCleaned === mobileTrimmed) {
+        alert("The player and partner cannot have the same mobile number.");
+        return;
+      }
+      const isPartnerMobileDuplicate = players.some(p => p.mobile && p.mobile.trim().replace(/[^0-9+]/g, '') === partnerMobileCleaned);
+      if (isPartnerMobileDuplicate) {
+        alert(`The partner's mobile number (${partnerMobileCleaned}) is already registered in this tournament. Mobile numbers must be unique.`);
+        return;
+      }
+    }
+
     try {
       // Helper to add a player
       const addPlayerToDb = async (pName: string, pAge: string, pMobile: string, pGender: string, pEmail?: string, pairId?: string) => {
-        const pMobileTrimmed = pMobile.trim();
+        const pMobileTrimmed = pMobile.trim().replace(/[^0-9+]/g, '');
         let playerChapterId = selectedChapterId;
         
         // Auto-connect with master registry L2
         let matchedGlobalL2Name = "";
+        let globalData = null;
         const globalPlayerSnap = await getDoc(doc(db, 'players', pMobileTrimmed));
         if (globalPlayerSnap.exists()) {
-          const globalData = globalPlayerSnap.data();
+          globalData = globalPlayerSnap.data();
+        } else {
+          const qGlobal = query(collection(db, 'players'), where('mobile', '==', pMobileTrimmed), limit(1));
+          const qSnap = await getDocs(qGlobal);
+          if (!qSnap.empty) {
+            globalData = qSnap.docs[0].data();
+          }
+        }
+
+        if (globalData) {
           if (globalData.l2) {
             matchedGlobalL2Name = globalData.l2;
             if (!playerChapterId) {
@@ -386,11 +432,7 @@ export default function PlayerManager({
       let playersAdded = [player1];
 
       if (isDoublesMode) {
-        if (!partnerName.trim() || !partnerMobile.trim()) {
-           alert("Partner details are required for doubles registration.");
-           return;
-        }
-        const player2 = await addPlayerToDb(partnerName, '', partnerMobile, partnerGender || 'Female', undefined, pairId);
+        const player2 = await addPlayerToDb(partnerName, '', partnerMobileCleaned, partnerGender || 'Female', undefined, pairId);
         playersAdded.push(player2);
       }
 
@@ -498,20 +540,23 @@ export default function PlayerManager({
   const handleSaveEdit = async () => {
     if (!editingPlayerId || !editForm.name.trim()) return;
 
-    const mobileTrimmed = editForm.mobile.trim();
+    const mobileTrimmed = editForm.mobile.trim().replace(/[^0-9+]/g, '');
     if (!mobileTrimmed) {
       alert("Mobile number is required as a unique player ID.");
       return;
     }
 
     // Uniqueness validation
-    const isMobileDuplicate = players.some(p => p.id !== editingPlayerId && p.mobile && p.mobile.trim() === mobileTrimmed);
+    const isMobileDuplicate = players.some(p => p.id !== editingPlayerId && p.mobile && p.mobile.trim().replace(/[^0-9+]/g, '') === mobileTrimmed);
     if (isMobileDuplicate) {
       alert("This mobile number is already registered for another player. Mobile numbers must be unique.");
       return;
     }
 
     try {
+      const oldPlayer = players.find(p => p.id === editingPlayerId);
+      const oldMobileCleaned = oldPlayer?.mobile?.trim().replace(/[^0-9+]/g, '');
+
       const playerRef = doc(db, `tournaments/${tournamentId}/players`, editingPlayerId);
       const updatedData = {
         name: editForm.name.trim(),
@@ -541,6 +586,11 @@ export default function PlayerManager({
         ...(globalL2 ? { l2: globalL2 } : {}),
         updatedAt: new Date().toISOString()
       }, { merge: true });
+
+      // Clean up old global profile if the mobile number changed
+      if (oldMobileCleaned && oldMobileCleaned !== mobileTrimmed) {
+        await deleteDoc(doc(db, 'players', oldMobileCleaned));
+      }
 
       const prevAssignment = allRootsPlayers.find(ap => ap.id === editingPlayerId);
       const prevChapterId = prevAssignment ? prevAssignment.level2Id : '';
@@ -894,7 +944,7 @@ export default function PlayerManager({
           isValid = false;
           errorMsg = "Duplicate phone number in pasted list.";
         } else if (!isDoublesImport) {
-          const isDbDuplicate = players.some(p => p.mobile && p.mobile.trim() === mobileCleaned);
+          const isDbDuplicate = players.some(p => p.mobile && p.mobile.trim().replace(/[^0-9+]/g, '') === mobileCleaned);
           if (isDbDuplicate) {
             isValid = false;
             errorMsg = "Phone number already exists in database.";
@@ -1040,7 +1090,7 @@ export default function PlayerManager({
         isValid = false;
         errorMsg = "Duplicate phone number in pasted list.";
       } else {
-        const isDbDuplicate = players.some(p => p.mobile && p.mobile.trim() === mobileCleaned);
+        const isDbDuplicate = players.some(p => p.mobile && p.mobile.trim().replace(/[^0-9+]/g, '') === mobileCleaned);
         if (isDbDuplicate) {
           isValid = false;
           errorMsg = "Phone number already exists in database.";
@@ -1924,7 +1974,7 @@ export default function PlayerManager({
                             isValid = false;
                             errorMsg = "Duplicate phone number in pasted list.";
                           } else {
-                            const isDbDup = players.some(dp => dp.mobile && dp.mobile.trim() === cleanMobile);
+                            const isDbDup = players.some(dp => dp.mobile && dp.mobile.trim().replace(/[^0-9+]/g, '') === cleanMobile);
                             if (isDbDup) {
                               isValid = false;
                               errorMsg = "Phone number already exists in database.";
