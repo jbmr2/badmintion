@@ -223,6 +223,12 @@ async function startServer() {
     timestamp: 0
   };
 
+  // Global cache for calculated master hierarchy
+  let masterHierarchyCalcCache = {
+    data: null,
+    timestamp: 0
+  };
+
   async function fetchConsolidatedPayload(db, fs) {
     const now = Date.now();
     if (allConsolidatedCache.data && (now - allConsolidatedCache.timestamp < 10000)) {
@@ -493,10 +499,530 @@ async function startServer() {
     }
   });
 
-  // Alias for /api/master-hierarchy representing all combined tournaments
+  // GET complete calculated master hierarchy (roots + level1 + level2) across all 3 games (all tournaments)
   app.get('/api/master-hierarchy', checkDb, async (req, res) => {
-    // Redirect to the unified endpoint
-    res.redirect('/api/tournaments/all/consolidated');
+    try {
+      const { db, fs } = req;
+      const { collection, getDocs } = fs;
+      const now = Date.now();
+
+      // Return cached calculated hierarchy if valid (TTL: 10 seconds)
+      if (masterHierarchyCalcCache.data && (now - masterHierarchyCalcCache.timestamp < 10000)) {
+        return res.json(masterHierarchyCalcCache.data);
+      }
+
+      // 1. Fetch complete master structure
+      let roots = [];
+      try {
+        const rootsSnap = await getDocs(collection(db, 'tournaments/_master_/roots'));
+        roots = rootsSnap.docs.map(d => ({ id: d.id, name: (d.data().name || '').trim() }));
+      } catch (err) {
+        console.error("Error fetching master roots:", err);
+      }
+
+      let level1s = [];
+      if (roots.length > 0) {
+        const level1Promises = roots.map(async (root) => {
+          try {
+            const level1Snap = await getDocs(collection(db, `tournaments/_master_/roots/${root.id}/level1`));
+            return level1Snap.docs.map(d => ({ id: d.id, name: (d.data().name || '').trim(), rootId: root.id }));
+          } catch (e) {
+            return [];
+          }
+        });
+        const level1sArrays = await Promise.all(level1Promises);
+        level1s = level1sArrays.flat();
+      }
+
+      let level2s = [];
+      if (level1s.length > 0) {
+        const level2Promises = level1s.map(async (l1) => {
+          try {
+            const level2Snap = await getDocs(collection(db, `tournaments/_master_/roots/${l1.rootId}/level1/${l1.id}/level2`));
+            return level2Snap.docs.map(d => ({ id: d.id, name: (d.data().name || '').trim(), level1Id: l1.id, rootId: l1.rootId }));
+          } catch (e) {
+            return [];
+          }
+        });
+        const level2sArrays = await Promise.all(level2Promises);
+        level2s = level2sArrays.flat();
+      }
+
+      // 2. Fetch all consolidated tournament data
+      const consolidated = await fetchConsolidatedPayload(db, fs);
+      const tournamentsList = consolidated.tournaments.filter(t => t.id !== '_master_' && t.id !== 'all');
+
+      // 3. Aggregate all matches, fixtures, tournament players, and assigned players
+      let allMatches = [];
+      let allFixtures = [];
+      let allTournamentPlayers = [];
+      let allAssignedPlayers = [];
+
+      tournamentsList.forEach(tItem => {
+        const tId = tItem.id;
+        if (tItem.matches) {
+          tItem.matches.forEach(m => {
+            allMatches.push({ ...m, tournamentId: tId });
+          });
+        }
+        if (tItem.fixtures) {
+          tItem.fixtures.forEach(f => {
+            allFixtures.push({ ...f, tournamentId: tId });
+          });
+        }
+        if (tItem.players) {
+          tItem.players.forEach(p => {
+            allTournamentPlayers.push({ ...p, tournamentId: tId });
+            if (p.level2Id) {
+              allAssignedPlayers.push({ ...p, tournamentId: tId });
+            }
+          });
+        }
+      });
+
+      // Maps for stats
+      const chapterStatsMap = {};
+      const parentStatsMap = {};
+      const rootStatsMap = {};
+
+      // Initialize with canonical master structures
+      level2s.forEach(l2 => {
+        const parent = level1s.find(l1 => l1.id === l2.level1Id);
+        const root = roots.find(r => r.id === l2.rootId);
+        
+        const rName = (root ? root.name : 'Unknown').trim();
+        const pName = (parent ? parent.name : 'Unknown').trim();
+        const cName = l2.name.trim();
+        
+        const key = `${rName}::${pName}::${cName}`.toLowerCase();
+        
+        if (!chapterStatsMap[key]) {
+          chapterStatsMap[key] = {
+            id: key, name: cName, parentName: pName, rootName: rName,
+            wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0, playerCount: 0, points: 0
+          };
+        }
+      });
+
+      level1s.forEach(l1 => {
+        const root = roots.find(r => r.id === l1.rootId);
+        const rName = (root ? root.name : 'Unknown').trim();
+        const pName = l1.name.trim();
+        const key = `${rName}::${pName}`.toLowerCase();
+
+        if (!parentStatsMap[key]) {
+          parentStatsMap[key] = {
+            id: key, name: pName, rootName: rName,
+            wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0, chapterCount: 0, points: 0
+          };
+        }
+      });
+
+      roots.forEach(r => {
+        const rName = r.name.trim();
+        const key = rName.toLowerCase();
+
+        if (!rootStatsMap[key]) {
+          rootStatsMap[key] = {
+            id: key, name: rName,
+            wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0, parentCount: 0, points: 0
+          };
+        }
+      });
+
+      // Helper to fetch player's Chapter, Parent and Root keys
+      const getPlayerLocation = (pId) => {
+        const p = allAssignedPlayers.find(item => item.id === pId);
+        if (!p) return null;
+        
+        const l2 = level2s.find(item => item.id === p.level2Id);
+        if (!l2) {
+          if (p.rootName && p.level1Name && p.level2Name) {
+            const rName = p.rootName.trim();
+            const pName = p.level1Name.trim();
+            const cName = p.level2Name.trim();
+            return {
+              chapterKey: `${rName}::${pName}::${cName}`.toLowerCase(),
+              parentKey: `${rName}::${pName}`.toLowerCase(),
+              rootKey: rName.toLowerCase(),
+              rName, pName, cName
+            };
+          }
+          return null;
+        }
+        
+        const parent = level1s.find(l1 => l1.id === l2.level1Id);
+        const root = roots.find(r => r.id === l2.rootId);
+
+        const rName = (root ? root.name : (p.rootName || 'Unknown')).trim();
+        const pName = (parent ? parent.name : (p.level1Name || 'Unknown')).trim();
+        const cName = l2.name.trim();
+
+        return {
+          chapterKey: `${rName}::${pName}::${cName}`.toLowerCase(),
+          parentKey: `${rName}::${pName}`.toLowerCase(),
+          rootKey: rName.toLowerCase(),
+          rName, pName, cName
+        };
+      };
+
+      const ensureChapterInit = (key, loc) => {
+        if (!chapterStatsMap[key]) {
+          chapterStatsMap[key] = {
+            id: key, name: loc.cName, parentName: loc.pName, rootName: loc.rName,
+            wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0, playerCount: 0, points: 0
+          };
+        }
+      };
+
+      const ensureParentInit = (key, loc) => {
+        if (!parentStatsMap[key]) {
+          parentStatsMap[key] = {
+            id: key, name: loc.pName, rootName: loc.rName,
+            wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0, chapterCount: 0, points: 0
+          };
+        }
+      };
+
+      const ensureRootInit = (key, loc) => {
+        if (!rootStatsMap[key]) {
+          rootStatsMap[key] = {
+            id: key, name: loc.rName,
+            wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0, parentCount: 0, points: 0
+          };
+        }
+      };
+
+      const playersWithHierarchyBonus = new Set();
+
+      // Accumulate matches
+      allMatches.forEach(match => {
+        const fixture = allFixtures.find(f => f.id === match.fixtureId);
+        if (!fixture) return;
+
+        const team1PlayerIds = [];
+        const team2PlayerIds = [];
+
+        const isDoublesMatch = !!(fixture.isDoubles || fixture.player1aId || fixture.player1bId || fixture.player2aId || fixture.player2bId);
+        if (isDoublesMatch) {
+          if (fixture.player1aId) team1PlayerIds.push(fixture.player1aId);
+          if (fixture.player1bId) team1PlayerIds.push(fixture.player1bId);
+          if (fixture.player2aId) team2PlayerIds.push(fixture.player2aId);
+          if (fixture.player2bId) team2PlayerIds.push(fixture.player2bId);
+
+          if (team1PlayerIds.length === 0 && fixture.player1Id) team1PlayerIds.push(fixture.player1Id);
+          if (team2PlayerIds.length === 0 && fixture.player2Id) team2PlayerIds.push(fixture.player2Id);
+        } else {
+          if (fixture.player1Id) team1PlayerIds.push(fixture.player1Id);
+          if (fixture.player2Id) team2PlayerIds.push(fixture.player2Id);
+        }
+
+        const s = match.scores || {};
+
+        let belongsToFamilyOrKids = false;
+        const allMatchPlayerIds = [...team1PlayerIds, ...team2PlayerIds];
+        for (const pId of allMatchPlayerIds) {
+          const loc = getPlayerLocation(pId);
+          if (loc) {
+            const rLower = loc.rName.toLowerCase();
+            const pLower = loc.pName.toLowerCase();
+            const cLower = loc.cName.toLowerCase();
+            if (
+              rLower.includes('family') || rLower.includes('kids') || rLower.includes('kid') ||
+              pLower.includes('family') || pLower.includes('kids') || pLower.includes('kid') ||
+              cLower.includes('family') || cLower.includes('kids') || cLower.includes('kid')
+            ) {
+              belongsToFamilyOrKids = true;
+              break;
+            }
+          }
+        }
+
+        const tId = fixture.tournamentId;
+        const tItem = tournamentsList.find(x => x.id === tId);
+        const tDoc = tItem ? tItem.tournament : null;
+        const isTournamentFamilyOrKids = !!(
+          tDoc?.name?.toLowerCase().includes('family') ||
+          tDoc?.name?.toLowerCase().includes('kids') ||
+          tDoc?.name?.toLowerCase().includes('kid') ||
+          (tDoc?.categories && Array.isArray(tDoc.categories) && tDoc.categories.some(cat => 
+            cat.toLowerCase().includes('family') || cat.toLowerCase().includes('kids') || cat.toLowerCase().includes('kid')
+          ))
+        );
+
+        const isFamilyCategory = 
+          fixture.groupName?.toLowerCase().includes('family') || 
+          fixture.groupName?.toLowerCase().includes('kids') || 
+          belongsToFamilyOrKids ||
+          isTournamentFamilyOrKids;
+
+        // Get match win points based on stage
+        const stage = (fixture.matchType || 'league').toLowerCase();
+        let matchWinPoints = 5;
+        if (stage.includes('pre_quarter') || stage.includes('pre-quarter') || stage.includes('pre quarter')) matchWinPoints = 5;
+        else if (stage.includes('quarter') || stage.includes('quater')) matchWinPoints = 10;
+        else if (stage.includes('semi')) matchWinPoints = 15;
+        else if (stage.includes('final')) matchWinPoints = 25;
+
+        const team1Chapters = new Set();
+        const team1Parents = new Set();
+        const team1Roots = new Set();
+
+        team1PlayerIds.forEach(pId => {
+          const loc = getPlayerLocation(pId);
+          if (loc) {
+            if (loc.chapterKey) team1Chapters.add(loc.chapterKey);
+            if (loc.parentKey) team1Parents.add(loc.parentKey);
+            if (loc.rootKey) team1Roots.add(loc.rootKey);
+          }
+        });
+
+        const team2Chapters = new Set();
+        const team2Parents = new Set();
+        const team2Roots = new Set();
+
+        team2PlayerIds.forEach(pId => {
+          const loc = getPlayerLocation(pId);
+          if (loc) {
+            if (loc.chapterKey) team2Chapters.add(loc.chapterKey);
+            if (loc.parentKey) team2Parents.add(loc.parentKey);
+            if (loc.rootKey) team2Roots.add(loc.rootKey);
+          }
+        });
+
+        // Update Team 1 Chapter, Parent and Root Stats
+        team1Chapters.forEach(chKey => {
+          const loc = getPlayerLocation(team1PlayerIds[0]);
+          ensureChapterInit(chKey, loc);
+          if (match.winner === 'player1') {
+            chapterStatsMap[chKey].wins++;
+            chapterStatsMap[chKey].points += isFamilyCategory ? 0 : matchWinPoints;
+          } else if (match.winner === 'player2') {
+            chapterStatsMap[chKey].losses++;
+          }
+          chapterStatsMap[chKey].gamesWon += Number(match.p1Games || 0);
+          chapterStatsMap[chKey].gamesLost += Number(match.p2Games || 0);
+          chapterStatsMap[chKey].pointsScored += Number(s.p1g1 || 0) + Number(s.p1g2 || 0) + Number(s.p1g3 || 0);
+          chapterStatsMap[chKey].pointsAgainst += Number(s.p2g1 || 0) + Number(s.p2g2 || 0) + Number(s.p2g3 || 0);
+        });
+
+        team1Parents.forEach(pKey => {
+          const loc = getPlayerLocation(team1PlayerIds[0]);
+          ensureParentInit(pKey, loc);
+          if (match.winner === 'player1') {
+            parentStatsMap[pKey].wins++;
+            parentStatsMap[pKey].points += isFamilyCategory ? 0 : matchWinPoints;
+          } else if (match.winner === 'player2') {
+            parentStatsMap[pKey].losses++;
+          }
+          parentStatsMap[pKey].gamesWon += Number(match.p1Games || 0);
+          parentStatsMap[pKey].gamesLost += Number(match.p2Games || 0);
+          parentStatsMap[pKey].pointsScored += Number(s.p1g1 || 0) + Number(s.p1g2 || 0) + Number(s.p1g3 || 0);
+          parentStatsMap[pKey].pointsAgainst += Number(s.p2g1 || 0) + Number(s.p2g2 || 0) + Number(s.p2g3 || 0);
+        });
+
+        team1Roots.forEach(rKey => {
+          const loc = getPlayerLocation(team1PlayerIds[0]);
+          ensureRootInit(rKey, loc);
+          if (match.winner === 'player1') {
+            rootStatsMap[rKey].wins++;
+            rootStatsMap[rKey].points += isFamilyCategory ? 0 : matchWinPoints;
+          } else if (match.winner === 'player2') {
+            rootStatsMap[rKey].losses++;
+          }
+          rootStatsMap[rKey].gamesWon += Number(match.p1Games || 0);
+          rootStatsMap[rKey].gamesLost += Number(match.p2Games || 0);
+          rootStatsMap[rKey].pointsScored += Number(s.p1g1 || 0) + Number(s.p1g2 || 0) + Number(s.p1g3 || 0);
+          rootStatsMap[rKey].pointsAgainst += Number(s.p2g1 || 0) + Number(s.p2g2 || 0) + Number(s.p2g3 || 0);
+        });
+
+        // Update Team 2 Chapter, Parent and Root Stats
+        team2Chapters.forEach(chKey => {
+          const loc = getPlayerLocation(team2PlayerIds[0]);
+          ensureChapterInit(chKey, loc);
+          if (match.winner === 'player2') {
+            chapterStatsMap[chKey].wins++;
+            chapterStatsMap[chKey].points += isFamilyCategory ? 0 : matchWinPoints;
+          } else if (match.winner === 'player1') {
+            chapterStatsMap[chKey].losses++;
+          }
+          chapterStatsMap[chKey].gamesWon += Number(match.p2Games || 0);
+          chapterStatsMap[chKey].gamesLost += Number(match.p1Games || 0);
+          chapterStatsMap[chKey].pointsScored += Number(s.p2g1 || 0) + Number(s.p2g2 || 0) + Number(s.p2g3 || 0);
+          chapterStatsMap[chKey].pointsAgainst += Number(s.p1g1 || 0) + Number(s.p1g2 || 0) + Number(s.p1g3 || 0);
+        });
+
+        team2Parents.forEach(pKey => {
+          const loc = getPlayerLocation(team2PlayerIds[0]);
+          ensureParentInit(pKey, loc);
+          if (match.winner === 'player2') {
+            parentStatsMap[pKey].wins++;
+            parentStatsMap[pKey].points += isFamilyCategory ? 0 : matchWinPoints;
+          } else if (match.winner === 'player1') {
+            parentStatsMap[pKey].losses++;
+          }
+          parentStatsMap[pKey].gamesWon += Number(match.p2Games || 0);
+          parentStatsMap[pKey].gamesLost += Number(match.p1Games || 0);
+          parentStatsMap[pKey].pointsScored += Number(s.p2g1 || 0) + Number(s.p2g2 || 0) + Number(s.p2g3 || 0);
+          parentStatsMap[pKey].pointsAgainst += Number(s.p1g1 || 0) + Number(s.p1g2 || 0) + Number(s.p1g3 || 0);
+        });
+
+        team2Roots.forEach(rKey => {
+          const loc = getPlayerLocation(team2PlayerIds[0]);
+          ensureRootInit(rKey, loc);
+          if (match.winner === 'player2') {
+            rootStatsMap[rKey].wins++;
+            rootStatsMap[rKey].points += isFamilyCategory ? 0 : matchWinPoints;
+          } else if (match.winner === 'player1') {
+            rootStatsMap[rKey].losses++;
+          }
+          rootStatsMap[rKey].gamesWon += Number(match.p2Games || 0);
+          rootStatsMap[rKey].gamesLost += Number(match.p1Games || 0);
+          rootStatsMap[rKey].pointsScored += Number(s.p2g1 || 0) + Number(s.p2g2 || 0) + Number(s.p2g3 || 0);
+          rootStatsMap[rKey].pointsAgainst += Number(s.p1g1 || 0) + Number(s.p1g2 || 0) + Number(s.p1g3 || 0);
+        });
+
+        const isPlayerFemale = (pId, groupName) => {
+          const p = allTournamentPlayers.find(x => x.id === pId);
+          if (p?.gender === 'Female' || p?.gender?.toLowerCase() === 'female') {
+            return true;
+          }
+          const gLower = (groupName || '').toLowerCase();
+          if ((gLower.includes('women') || gLower.includes('female')) && !gLower.includes('mixed') && !gLower.includes('open')) {
+            return true;
+          }
+          return false;
+        };
+
+        // Award female player bonus points (+5 points flat for 1st match played) to chapter/parent/root
+        if (!isFamilyCategory) {
+          team1PlayerIds.forEach(pId => {
+            const bonusKey = `${tId}::${pId}`;
+            if (isPlayerFemale(pId, fixture.groupName) && !playersWithHierarchyBonus.has(bonusKey)) {
+              playersWithHierarchyBonus.add(bonusKey);
+              const loc = getPlayerLocation(pId);
+              if (loc) {
+                if (loc.chapterKey) {
+                  ensureChapterInit(loc.chapterKey, loc);
+                  chapterStatsMap[loc.chapterKey].points += 5;
+                }
+                if (loc.parentKey) {
+                  ensureParentInit(loc.parentKey, loc);
+                  parentStatsMap[loc.parentKey].points += 5;
+                }
+                if (loc.rootKey) {
+                  ensureRootInit(loc.rootKey, loc);
+                  rootStatsMap[loc.rootKey].points += 5;
+                }
+              }
+            }
+          });
+
+          team2PlayerIds.forEach(pId => {
+            const bonusKey = `${tId}::${pId}`;
+            if (isPlayerFemale(pId, fixture.groupName) && !playersWithHierarchyBonus.has(bonusKey)) {
+              playersWithHierarchyBonus.add(bonusKey);
+              const loc = getPlayerLocation(pId);
+              if (loc) {
+                if (loc.chapterKey) {
+                  ensureChapterInit(loc.chapterKey, loc);
+                  chapterStatsMap[loc.chapterKey].points += 5;
+                }
+                if (loc.parentKey) {
+                  ensureParentInit(loc.parentKey, loc);
+                  parentStatsMap[loc.parentKey].points += 5;
+                }
+                if (loc.rootKey) {
+                  ensureRootInit(loc.rootKey, loc);
+                  rootStatsMap[loc.rootKey].points += 5;
+                }
+              }
+            }
+          });
+        }
+      });
+
+      // Calculate player counts
+      const chapterPlayersSet = {};
+      allAssignedPlayers.forEach(p => {
+        const loc = getPlayerLocation(p.id);
+        if (loc && loc.chapterKey) {
+          if (!chapterPlayersSet[loc.chapterKey]) {
+            chapterPlayersSet[loc.chapterKey] = new Set();
+          }
+          chapterPlayersSet[loc.chapterKey].add(p.id);
+        }
+      });
+
+      Object.keys(chapterStatsMap).forEach(key => {
+        chapterStatsMap[key].playerCount = chapterPlayersSet[key] ? chapterPlayersSet[key].size : 0;
+      });
+
+      // Calculate chapter counts per parent
+      const parentChaptersSet = {};
+      Object.keys(chapterStatsMap).forEach(chKey => {
+        const ch = chapterStatsMap[chKey];
+        const pKey = `${ch.rootName}::${ch.parentName}`.toLowerCase();
+        if (!parentChaptersSet[pKey]) {
+          parentChaptersSet[pKey] = new Set();
+        }
+        parentChaptersSet[pKey].add(chKey);
+      });
+
+      Object.keys(parentStatsMap).forEach(key => {
+        parentStatsMap[key].chapterCount = parentChaptersSet[key] ? parentChaptersSet[key].size : 0;
+      });
+
+      // Calculate parent counts per root
+      const rootParentsSet = {};
+      Object.keys(parentStatsMap).forEach(pKey => {
+        const p = parentStatsMap[pKey];
+        const rKey = p.rootName.toLowerCase();
+        if (!rootParentsSet[rKey]) {
+          rootParentsSet[rKey] = new Set();
+        }
+        rootParentsSet[rKey].add(pKey);
+      });
+
+      Object.keys(rootStatsMap).forEach(key => {
+        rootStatsMap[key].parentCount = rootParentsSet[key] ? rootParentsSet[key].size : 0;
+      });
+
+      // Sort lists
+      const sortStatsList = (list) => {
+        return [...list].sort((a, b) => {
+          if (b.points !== a.points) return b.points - a.points;
+          if (b.wins !== a.wins) return b.wins - a.wins;
+
+          const aGD = a.gamesWon - a.gamesLost;
+          const bGD = b.gamesWon - b.gamesLost;
+          if (bGD !== aGD) return bGD - aGD;
+
+          const aPD = a.pointsScored - a.pointsAgainst;
+          const bPD = b.pointsScored - b.pointsAgainst;
+          if (bPD !== aPD) return bPD - aPD;
+
+          return a.name.localeCompare(b.name);
+        });
+      };
+
+      const finalResponse = {
+        timestamp: new Date().toISOString(),
+        roots: sortStatsList(Object.values(rootStatsMap)),
+        parents: sortStatsList(Object.values(parentStatsMap)),
+        chapters: sortStatsList(Object.values(chapterStatsMap))
+      };
+
+      // Store in cache
+      masterHierarchyCalcCache = {
+        data: finalResponse,
+        timestamp: now
+      };
+
+      res.json(finalResponse);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // GET specific tournament details
