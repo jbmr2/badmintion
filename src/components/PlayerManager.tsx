@@ -225,87 +225,25 @@ export default function PlayerManager({
     return () => unsubscribe();
   }, [tournamentId]);
 
-  // 2. Fetch Roots
-  useEffect(() => {
+  // Fetch complete master hierarchy from the high-performance cached API endpoint
+  const loadHierarchy = async () => {
     if (!tournamentId) return;
-    const qRoots = query(collection(db, `tournaments/_master_/roots`));
-    return onSnapshot(qRoots, (snapshot) => {
-      setRoots(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-    }, (e) => console.error("Error fetching roots:", e));
+    try {
+      const res = await fetch(`/api/tournaments/${tournamentId}/hierarchy`);
+      if (!res.ok) throw new Error('Failed to load hierarchy');
+      const data = await res.json();
+      setRoots(data.roots || []);
+      setAllRootsLevel1(data.level1 || []);
+      setAllRootsLevel2(data.level2 || []);
+      setAllRootsPlayers(data.players || []);
+    } catch (err) {
+      console.error("Error loading hierarchy in PlayerManager:", err);
+    }
+  };
+
+  useEffect(() => {
+    loadHierarchy();
   }, [tournamentId]);
-
-  // 3. Fetch Level 1s
-  useEffect(() => {
-    if (roots.length === 0 || !tournamentId) {
-      setAllRootsLevel1([]);
-      return;
-    }
-    const unsubscribes = roots.map(root => {
-      const q = query(collection(db, `tournaments/_master_/roots/${root.id}/level1`));
-      return onSnapshot(q, (snapshot) => {
-        setAllRootsLevel1(prev => {
-          const filtered = prev.filter(item => item.rootId !== root.id);
-          const newItems = snapshot.docs.map(doc => ({ id: doc.id, rootId: root.id, rootName: root.name, ...doc.data() }));
-          return [...filtered, ...newItems];
-        });
-      }, (err) => console.error("Error fetching level1s:", err));
-    });
-    return () => unsubscribes.forEach(unsub => unsub());
-  }, [roots, tournamentId]);
-
-  // 4. Fetch Level 2s (Chapters)
-  useEffect(() => {
-    if (allRootsLevel1.length === 0 || !tournamentId) {
-      setAllRootsLevel2([]);
-      return;
-    }
-    const unsubscribes = allRootsLevel1.map(l1 => {
-      const q = query(collection(db, `tournaments/_master_/roots/${l1.rootId}/level1/${l1.id}/level2`));
-      return onSnapshot(q, (snapshot) => {
-        setAllRootsLevel2(prev => {
-          const filtered = prev.filter(item => item.level1Id !== l1.id);
-          const newItems = snapshot.docs.map(doc => ({ 
-            id: doc.id, 
-            level1Id: l1.id, 
-            level1Name: l1.name,
-            rootId: l1.rootId, 
-            rootName: l1.rootName,
-            ...doc.data() 
-          }));
-          return [...filtered, ...newItems];
-        });
-      }, (err) => console.error("Error fetching level2s:", err));
-    });
-    return () => unsubscribes.forEach(unsub => unsub());
-  }, [allRootsLevel1, tournamentId]);
-
-  // 5. Fetch all roster players assignments
-  useEffect(() => {
-    if (allRootsLevel2.length === 0 || !tournamentId) {
-      setAllRootsPlayers([]);
-      return;
-    }
-    const unsubscribes = allRootsLevel2.map(l2 => {
-      const q = query(collection(db, `tournaments/${tournamentId}/roots/${l2.rootId}/level1/${l2.level1Id}/level2/${l2.id}/players`));
-      return onSnapshot(q, (snapshot) => {
-        setAllRootsPlayers(prev => {
-          const filtered = prev.filter(item => item.level2Id !== l2.id);
-          const newItems = snapshot.docs.map(doc => ({ 
-            id: doc.id, 
-            level2Id: l2.id, 
-            level2Name: l2.name,
-            level1Id: l2.level1Id, 
-            level1Name: l2.level1Name,
-            rootId: l2.rootId, 
-            rootName: l2.rootName,
-            ...doc.data() 
-          }));
-          return [...filtered, ...newItems];
-        });
-      }, (err) => console.error("Error fetching assigned players:", err));
-    });
-    return () => unsubscribes.forEach(unsub => unsub());
-  }, [allRootsLevel2, tournamentId]);
 
   // Create player + optional assignment
   const handleAdd = async () => {
@@ -454,6 +392,7 @@ export default function PlayerManager({
       setSelectedChapterId('');
       setSelectedGroupId('');
       setMatchedMasterProfile(null);
+      await loadHierarchy();
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, `tournaments/${tournamentId}/players`);
     }
@@ -482,6 +421,7 @@ export default function PlayerManager({
       // Delete main player doc
       await deleteDoc(doc(db, `tournaments/${tournamentId}/players`, playerId));
       setPlayerToDelete(null);
+      await loadHierarchy();
     } catch (err: any) {
       console.error(err);
       alert("Failed to delete player: " + err?.message);
@@ -656,6 +596,7 @@ export default function PlayerManager({
         }
       }
 
+      await loadHierarchy();
       setEditingPlayerId(null);
     } catch (err: any) {
       console.error(err);
@@ -1305,6 +1246,7 @@ export default function PlayerManager({
       setImportProgress(Math.round(((idx + 1) / total) * 100));
     }
 
+    await loadHierarchy();
     setIsImporting(false);
     alert(`Bulk import completed! Successfully registered ${successCount} of ${total} player profiles.`);
     setParsedPlayers([]);

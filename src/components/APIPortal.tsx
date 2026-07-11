@@ -173,6 +173,12 @@ export default function APIPortal({ currentTournamentId, onBack }: APIPortalProp
     },
     {
       method: 'GET',
+      path: '/api/tournaments/:tournamentId/hierarchy',
+      description: 'Fetch complete consolidated tournament organizational structure (roots + level1 + level2 + assigned players) in one extremely fast, cached request.',
+      requiresTournamentId: true
+    },
+    {
+      method: 'GET',
       path: '/api/global-players',
       description: 'Fetch the master global player registry database (cross-tournament).',
       requiresTournamentId: false
@@ -408,13 +414,57 @@ export default function APIPortal({ currentTournamentId, onBack }: APIPortalProp
                     .map((p: any) => (
                       <div 
                         key={p.id}
-                        className="p-3 bg-slate-50 hover:bg-slate-100/80 border border-slate-100 rounded-xl transition flex flex-col gap-1 text-xs"
+                        className="p-3 bg-slate-50 hover:bg-slate-100/80 border border-slate-100 rounded-xl transition flex flex-col gap-1.5 text-xs"
                       >
-                        <div className="flex justify-between items-center">
-                          <span className="font-bold text-slate-800">{p.name}</span>
-                          <span className="font-mono text-[9px] bg-slate-200/60 px-1.5 py-0.5 rounded text-slate-500">ID: {p.id.slice(0,6)}</span>
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <span className="font-bold text-slate-800 text-[13px]">{p.name}</span>
+                            {p.email && (
+                              <p className="text-[10px] text-slate-500 font-medium select-all mt-0.5" title="Copy Email">
+                                ✉️ {p.email}
+                              </p>
+                            )}
+                            {p.mobile && (
+                              <p className="text-[10px] text-slate-500 font-medium select-all mt-0.5" title="Copy Mobile">
+                                📞 {p.mobile}
+                              </p>
+                            )}
+                          </div>
+                          <span className="font-mono text-[9px] bg-slate-200/60 px-1.5 py-0.5 rounded text-slate-500 whitespace-nowrap">
+                            ID: {p.id}
+                          </span>
                         </div>
-                        <div className="flex flex-wrap gap-1.5 mt-1 text-[10px] text-slate-500">
+
+                        {/* Player details grid */}
+                        <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] text-slate-500 bg-white/50 border border-slate-100 p-2 rounded-lg">
+                          {p.age && (
+                            <div>
+                              <span className="text-slate-400">Age:</span> <span className="font-semibold text-slate-700">{p.age}</span>
+                            </div>
+                          )}
+                          {p.gender && (
+                            <div>
+                              <span className="text-slate-400">Gender:</span> <span className="font-semibold text-slate-700">{p.gender}</span>
+                            </div>
+                          )}
+                          {p.rootName && (
+                            <div className="col-span-2">
+                              <span className="text-slate-400">Root:</span> <span className="font-semibold text-slate-700">{p.rootName}</span>
+                            </div>
+                          )}
+                          {p.level1Name && (
+                            <div className="col-span-2">
+                              <span className="text-slate-400">L1:</span> <span className="font-semibold text-indigo-600">{p.level1Name}</span>
+                            </div>
+                          )}
+                          {p.level2Name && (
+                            <div className="col-span-2">
+                              <span className="text-slate-400">L2:</span> <span className="font-semibold text-emerald-600">{p.level2Name}</span>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap gap-1 mt-0.5 text-[10px]">
                           {p.category && (
                             <span className="bg-white border border-slate-200 px-1.5 py-0.5 rounded text-slate-600 font-medium">
                               {p.category}
@@ -694,15 +744,25 @@ export default function APIPortal({ currentTournamentId, onBack }: APIPortalProp
                                     ? (f.player1bName ? `${f.player1aName} & ${f.player1bName}` : f.player1aName)
                                     : f.player1Name}
                                 </span>
+                                {!f.isDoubles && f.player1Email && (
+                                  <span className="text-[9px] text-slate-400 font-normal mt-0.5 select-all" title={f.player1Email}>
+                                    {f.player1Email}
+                                  </span>
+                                )}
+                                {f.isDoubles && (f.player1aEmail || f.player1bEmail) && (
+                                  <span className="text-[8px] text-slate-400 font-normal mt-0.5 select-all" title="Player emails">
+                                    {[f.player1aEmail, f.player1bEmail].filter(Boolean).join(', ')}
+                                  </span>
+                                )}
                                 {f.isDoubles ? (
                                   (f.player1aL2Name || f.player1bL2Name) && (
-                                    <span className="text-[9px] text-indigo-600 font-medium mt-0.5 bg-indigo-50/70 border border-indigo-100/50 px-1 py-0.2 rounded-sm">
+                                    <span className="text-[9px] text-indigo-600 font-medium mt-1 bg-indigo-50/70 border border-indigo-100/50 px-1 py-0.2 rounded-sm">
                                       L2: {[f.player1aL2Name, f.player1bL2Name].filter(Boolean).join(' & ')}
                                     </span>
                                   )
                                 ) : (
                                   f.player1L2Name && (
-                                    <span className="text-[9px] text-indigo-600 font-medium mt-0.5 bg-indigo-50/70 border border-indigo-100/50 px-1 py-0.2 rounded-sm">
+                                    <span className="text-[9px] text-indigo-600 font-medium mt-1 bg-indigo-50/70 border border-indigo-100/50 px-1 py-0.2 rounded-sm">
                                       L2: {f.player1L2Name}
                                     </span>
                                   )
@@ -717,15 +777,25 @@ export default function APIPortal({ currentTournamentId, onBack }: APIPortalProp
                                     ? (f.player2bName ? `${f.player2aName} & ${f.player2bName}` : f.player2aName)
                                     : f.player2Name}
                                 </span>
+                                {!f.isDoubles && f.player2Email && (
+                                  <span className="text-[9px] text-slate-400 font-normal mt-0.5 select-all" title={f.player2Email}>
+                                    {f.player2Email}
+                                  </span>
+                                )}
+                                {f.isDoubles && (f.player2aEmail || f.player2bEmail) && (
+                                  <span className="text-[8px] text-slate-400 font-normal mt-0.5 select-all" title="Player emails">
+                                    {[f.player2aEmail, f.player2bEmail].filter(Boolean).join(', ')}
+                                  </span>
+                                )}
                                 {f.isDoubles ? (
                                   (f.player2aL2Name || f.player2bL2Name) && (
-                                    <span className="text-[9px] text-indigo-600 font-medium mt-0.5 bg-indigo-50/70 border border-indigo-100/50 px-1 py-0.2 rounded-sm">
+                                    <span className="text-[9px] text-indigo-600 font-medium mt-1 bg-indigo-50/70 border border-indigo-100/50 px-1 py-0.2 rounded-sm">
                                       L2: {[f.player2aL2Name, f.player2bL2Name].filter(Boolean).join(' & ')}
                                     </span>
                                   )
                                 ) : (
                                   f.player2L2Name && (
-                                    <span className="text-[9px] text-indigo-600 font-medium mt-0.5 bg-indigo-50/70 border border-indigo-100/50 px-1 py-0.2 rounded-sm">
+                                    <span className="text-[9px] text-indigo-600 font-medium mt-1 bg-indigo-50/70 border border-indigo-100/50 px-1 py-0.2 rounded-sm">
                                       L2: {f.player2L2Name}
                                     </span>
                                   )

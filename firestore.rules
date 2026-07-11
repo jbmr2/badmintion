@@ -35,7 +35,7 @@ service cloud.firestore {
     }
 
     function isValidPlayer(data) {
-      return data.name is string && data.name.size() > 0 && data.name.size() < 100;
+      return data != null && ('name' in data) && data.name is string && data.name.size() > 0;
     }
 
     // --- Global / Root Rules ---
