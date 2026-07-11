@@ -1691,24 +1691,17 @@ export default function HierarchyManager({
     doc.setTextColor(100, 100, 100);
     doc.text(`🏸 ${sportName.toUpperCase()} MASTER HIERARCHY REPORT`, 14, 16);
     
-    doc.setFontSize(15);
+    doc.setFontSize(14);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(20, 20, 20);
     const titleText = isAllMode ? "Global Master Hierarchy Standings" : (activeTournament?.name || "Tournament Master Hierarchy Report");
     doc.text(titleText, 14, 23);
     
-    doc.setFontSize(10);
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(80, 80, 80);
-    doc.text(`🏷️ Category: ${isAllMode ? "All Categories Combined" : (activeTournament?.category || "N/A")}`, 14, 29);
-    doc.text(`📅 Date: ${isAllMode ? "Various" : (activeTournament?.date || "N/A")}  |  📍 Location: ${isAllMode ? "Multiple Sites" : (activeTournament?.location || "N/A")}  |  🔑 Context: ${isAllMode ? "Global" : selectedTournamentId}`, 14, 35);
-    doc.text(`⏱️ Generated: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`, 14, 41);
-    
     // Draw horizontal line
     doc.setDrawColor(200, 200, 200);
-    doc.line(14, 45, 196, 45);
+    doc.line(14, 27, 196, 27);
     
-    let y = 52;
+    let y = 35;
     
     // Section 1: Roots Standings
     doc.setFontSize(13);

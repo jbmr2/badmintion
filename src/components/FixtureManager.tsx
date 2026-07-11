@@ -860,23 +860,16 @@ export default function FixtureManager({
     doc.setTextColor(100, 100, 100);
     doc.text(`🏸 ${sportName.toUpperCase()} TOURNAMENT REPORT`, 14, 16);
     
-    doc.setFontSize(15);
+    doc.setFontSize(14);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(20, 20, 20);
     const titleText = tournamentInfo?.name || "Tournament Match Fixtures";
     doc.text(titleText, 14, 23);
     
-    doc.setFontSize(10);
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(80, 80, 80);
-    doc.text(`🏷️ Category: ${tournamentInfo?.category || "N/A"}`, 14, 29);
-    doc.text(`📅 Date: ${tournamentInfo?.date || "N/A"}  |  📍 Location: ${tournamentInfo?.location || "N/A"}  |  🔑 Code: ${tournamentId}`, 14, 35);
-    doc.text(`⏱️ Generated: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}  |  Active Filters: Group: ${groupFilter.toUpperCase()} | Stage: ${typeFilter.toUpperCase()}`, 14, 41);
-    
     doc.setDrawColor(200, 200, 200);
-    doc.line(14, 45, 196, 45);
+    doc.line(14, 27, 196, 27);
     
-    let y = 52;
+    let y = 35;
     
     const getPlayerDetailsWithHierarchy = (name: string, playerId: string) => {
       if (!playerId) return name;
