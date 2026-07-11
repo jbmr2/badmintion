@@ -68,6 +68,7 @@ export default function FixtureManager({
   const [editingFixture, setEditingFixture] = useState<any | null>(null);
   const [matchNumber, setMatchNumber] = useState('');
   const [matches, setMatches] = useState<any[]>([]);
+  const [tournamentInfo, setTournamentInfo] = useState<any | null>(null);
 
   // Score Entry Modal States
   const [scoringFixture, setScoringFixture] = useState<any | null>(null);
@@ -217,6 +218,7 @@ export default function FixtureManager({
       (snapshot) => {
         if (snapshot.exists()) {
           const data = snapshot.data();
+          setTournamentInfo({ id: snapshot.id, ...data });
           if (data && data.courts && Array.isArray(data.courts) && data.courts.length > 0) {
             setCourts(data.courts);
           }
@@ -852,18 +854,27 @@ export default function FixtureManager({
     const doc = new jsPDF();
     
     // Header
-    doc.setFontSize(18);
+    const sportName = tournamentInfo?.sport || "Badminton";
+    doc.setFontSize(10);
     doc.setFont("helvetica", "bold");
-    doc.text("Badminton Tournament Match Fixtures", 14, 22);
+    doc.setTextColor(100, 100, 100);
+    doc.text(`🏸 ${sportName.toUpperCase()} TOURNAMENT REPORT`, 14, 16);
+    
+    doc.setFontSize(15);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(20, 20, 20);
+    const titleText = tournamentInfo?.name || "Tournament Match Fixtures";
+    doc.text(titleText, 14, 23);
     
     doc.setFontSize(10);
     doc.setFont("helvetica", "normal");
-    doc.text(`Generated: ${new Date().toLocaleDateString()}`, 14, 28);
-    doc.text(`Tournament ID: ${tournamentId}`, 14, 34);
-    doc.text(`Active Filters: Group: ${groupFilter.toUpperCase()} | Stage: ${typeFilter.toUpperCase()} | Status: ${statusFilter.toUpperCase()}`, 14, 40);
+    doc.setTextColor(80, 80, 80);
+    doc.text(`🏷️ Category: ${tournamentInfo?.category || "N/A"}`, 14, 29);
+    doc.text(`📅 Date: ${tournamentInfo?.date || "N/A"}  |  📍 Location: ${tournamentInfo?.location || "N/A"}  |  🔑 Code: ${tournamentId}`, 14, 35);
+    doc.text(`⏱️ Generated: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}  |  Active Filters: Group: ${groupFilter.toUpperCase()} | Stage: ${typeFilter.toUpperCase()}`, 14, 41);
     
     doc.setDrawColor(200, 200, 200);
-    doc.line(14, 44, 196, 44);
+    doc.line(14, 45, 196, 45);
     
     let y = 52;
     

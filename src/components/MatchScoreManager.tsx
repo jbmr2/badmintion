@@ -840,18 +840,27 @@ export default function MatchScoreManager({
     const doc = new jsPDF();
     
     // Header
-    doc.setFontSize(18);
+    const sportName = tournament?.sport || "Badminton";
+    doc.setFontSize(10);
     doc.setFont("helvetica", "bold");
-    doc.text("Badminton Tournament Match Scores & Fixtures", 14, 22);
+    doc.setTextColor(100, 100, 100);
+    doc.text(`🏸 ${sportName.toUpperCase()} TOURNAMENT MATCHES`, 14, 16);
+    
+    doc.setFontSize(15);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(20, 20, 20);
+    const titleText = tournament?.name || "Tournament Match Scores & Fixtures";
+    doc.text(titleText, 14, 23);
     
     doc.setFontSize(10);
     doc.setFont("helvetica", "normal");
-    doc.text(`Generated: ${new Date().toLocaleDateString()}`, 14, 28);
-    doc.text(`Tournament ID: ${tournamentId}`, 14, 34);
-    doc.text(`Active Filter: ${filter.toUpperCase()}`, 14, 40);
+    doc.setTextColor(80, 80, 80);
+    doc.text(`🏷️ Category: ${tournament?.category || "N/A"}`, 14, 29);
+    doc.text(`📅 Date: ${tournament?.date || "N/A"}  |  📍 Location: ${tournament?.location || "N/A"}  |  🔑 Code: ${tournamentId}`, 14, 35);
+    doc.text(`⏱️ Generated: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}  |  Active Filter: ${filter.toUpperCase()}`, 14, 41);
     
     doc.setDrawColor(200, 200, 200);
-    doc.line(14, 44, 196, 44);
+    doc.line(14, 45, 196, 45);
     
     let y = 52;
     

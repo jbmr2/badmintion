@@ -62,6 +62,7 @@ export default function GroupManager({
   const [playerAssignments, setPlayerAssignments] = useState<{ [playerId: string]: string }>({});
   const [groups, setGroups] = useState<{id: string, name: string}[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [tournamentInfo, setTournamentInfo] = useState<any | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -284,9 +285,16 @@ export default function GroupManager({
       }
     });
     
+    const unsubTournament = onSnapshot(doc(db, 'tournaments', tournamentId), (snapshot) => {
+      if (snapshot.exists()) {
+        setTournamentInfo({ id: snapshot.id, ...snapshot.data() });
+      }
+    });
+    
     return () => {
       unsubPlayers();
       unsubGroups();
+      unsubTournament();
     };
   }, [tournamentId]);
 
@@ -658,21 +666,47 @@ export default function GroupManager({
     const doc = new jsPDF();
     
     // Header
-    doc.setFontSize(18);
+    const sportName = tournamentInfo?.sport || "Badminton";
+    doc.setFontSize(10);
     doc.setFont("helvetica", "bold");
-    doc.text("Badminton Tournament Groups & Rosters", 14, 22);
+    doc.setTextColor(100, 100, 100);
+    doc.text(`🏸 ${sportName.toUpperCase()} TOURNAMENT GROUPS`, 14, 16);
+    
+    doc.setFontSize(15);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(20, 20, 20);
+    const titleText = tournamentInfo?.name || "Tournament Groups & Rosters";
+    doc.text(titleText, 14, 23);
     
     doc.setFontSize(10);
     doc.setFont("helvetica", "normal");
-    doc.text(`Generated: ${new Date().toLocaleDateString()}`, 14, 28);
-    doc.text(`Total Groups: ${groups.length}  |  Total Players: ${players.length}`, 14, 34);
+    doc.setTextColor(80, 80, 80);
+    doc.text(`🏷️ Category: ${tournamentInfo?.category || "N/A"}`, 14, 29);
+    doc.text(`📅 Date: ${tournamentInfo?.date || "N/A"}  |  📍 Location: ${tournamentInfo?.location || "N/A"}  |  🔑 Code: ${tournamentId}`, 14, 35);
+    doc.text(`⏱️ Generated: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}  |  Total Groups: ${groups.length}  |  Total Players: ${players.length}`, 14, 41);
     
     // Draw horizontal line
     doc.setDrawColor(200, 200, 200);
-    doc.line(14, 38, 196, 38);
+    doc.line(14, 45, 196, 45);
     
-    let y = 46;
+    let y = 52;
     
+    const playerL1Map = Object.fromEntries(allRootsPlayers.map(ap => [ap.id, ap.level1Name || ap.parentName]));
+    const playerL2Map = Object.fromEntries(allRootsPlayers.map(ap => [ap.id, ap.level2Name || ap.chapterName]));
+
+    const getPlayerDetailsWithHierarchy = (name: string, playerId: string) => {
+      if (!playerId) return name;
+      const l2 = playerL2Map[playerId];
+      const l1 = playerL1Map[playerId];
+      const parts = [];
+      if (l1) parts.push(l1);
+      if (l2) parts.push(l2);
+      if (parts.length > 0) {
+        return `${name} (${parts.join('/')})`;
+      }
+      return name;
+    };
+
     groups.forEach((group) => {
       const groupPlayers = players.filter(p => playerAssignments[p.id] === group.name);
       
@@ -701,31 +735,42 @@ export default function GroupManager({
       } else {
         doc.setFont("helvetica", "bold");
         doc.text("#", 14, y);
-        doc.text("Player Name", 25, y);
-        doc.text("Gender", 85, y);
-        doc.text("Age", 105, y);
-        doc.text("Phone / Mobile", 125, y);
+        doc.text("Player Name (L1 / L2 Hierarchy)", 25, y);
+        doc.text("Gender", 115, y);
+        doc.text("Age", 135, y);
+        doc.text("Phone / Mobile", 155, y);
         y += 4;
         doc.line(14, y, 196, y);
         y += 6;
         
         doc.setFont("helvetica", "normal");
         groupPlayers.forEach((p, idx) => {
-          if (y > 280) {
+          const nameStr = getPlayerDetailsWithHierarchy(p.name || "N/A", p.id);
+          const nameLines: string[] = doc.splitTextToSize(nameStr, 85);
+          const maxLines = Math.max(nameLines.length, 1);
+          const rowHeight = maxLines * 4.5 + 2.5;
+
+          if (y + rowHeight > 280) {
             doc.addPage();
             y = 20;
             doc.setFont("helvetica", "bold");
             doc.text(`${group.name} (Continued)`, 14, y);
             y += 6;
+            doc.setFont("helvetica", "normal");
           }
           
           doc.text(String(idx + 1), 14, y);
-          doc.text(p.name || "N/A", 25, y);
-          doc.text(p.gender || "Male", 85, y);
-          doc.text(p.age ? String(p.age) : "-", 105, y);
-          doc.text(p.mobile || "-", 125, y);
           
-          y += 7;
+          // Render name lines
+          nameLines.forEach((line, idxLine) => {
+            doc.text(line, 25, y + idxLine * 4.5);
+          });
+
+          doc.text(p.gender || "Male", 115, y);
+          doc.text(p.age ? String(p.age) : "-", 135, y);
+          doc.text(p.mobile || "-", 155, y);
+          
+          y += rowHeight;
         });
         y += 4; // Extra space after group
       }

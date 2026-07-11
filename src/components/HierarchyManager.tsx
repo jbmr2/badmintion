@@ -1682,21 +1682,33 @@ export default function HierarchyManager({
     const doc = new jsPDF();
     const data = getHierarchyPointsData();
     const isAllMode = selectedTournamentId === 'all';
+    const activeTournament = tournaments.find(t => t.id === selectedTournamentId);
     
     // Header
-    doc.setFontSize(18);
+    const sportName = activeTournament?.sport || "Multi-Sport";
+    doc.setFontSize(10);
     doc.setFont("helvetica", "bold");
-    doc.text("Badminton Tournament Master Hierarchy Points Report", 14, 22);
+    doc.setTextColor(100, 100, 100);
+    doc.text(`🏸 ${sportName.toUpperCase()} MASTER HIERARCHY REPORT`, 14, 16);
+    
+    doc.setFontSize(15);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(20, 20, 20);
+    const titleText = isAllMode ? "Global Master Hierarchy Standings" : (activeTournament?.name || "Tournament Master Hierarchy Report");
+    doc.text(titleText, 14, 23);
     
     doc.setFontSize(10);
     doc.setFont("helvetica", "normal");
-    doc.text(`Generated: ${new Date().toLocaleDateString()}`, 14, 28);
-    doc.text(`Tournament Context: ${isAllMode ? "All Tournaments" : (selectedTournamentId || "N/A")}`, 14, 34);
+    doc.setTextColor(80, 80, 80);
+    doc.text(`🏷️ Category: ${isAllMode ? "All Categories Combined" : (activeTournament?.category || "N/A")}`, 14, 29);
+    doc.text(`📅 Date: ${isAllMode ? "Various" : (activeTournament?.date || "N/A")}  |  📍 Location: ${isAllMode ? "Multiple Sites" : (activeTournament?.location || "N/A")}  |  🔑 Context: ${isAllMode ? "Global" : selectedTournamentId}`, 14, 35);
+    doc.text(`⏱️ Generated: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`, 14, 41);
     
+    // Draw horizontal line
     doc.setDrawColor(200, 200, 200);
-    doc.line(14, 38, 196, 38);
+    doc.line(14, 45, 196, 45);
     
-    let y = 46;
+    let y = 52;
     
     // Section 1: Roots Standings
     doc.setFontSize(13);
@@ -1720,19 +1732,29 @@ export default function HierarchyManager({
     
     doc.setFont("helvetica", "normal");
     data.roots.forEach((row: any, idx: number) => {
-      if (y > 270) {
+      const nameStr = row.name || "N/A";
+      const nameLines: string[] = doc.splitTextToSize(nameStr, 53);
+      const maxLines = Math.max(nameLines.length, 1);
+      const rowHeight = maxLines * 4.5 + 2.5;
+
+      if (y + rowHeight > 275) {
         doc.addPage();
         y = 20;
       }
       doc.text(String(idx + 1), 14, y);
-      doc.text(row.name || "N/A", 25, y);
+      
+      // Render name lines
+      nameLines.forEach((line, idxLine) => {
+        doc.text(line, 25, y + idxLine * 4.5);
+      });
+
       doc.text(String(row.parentCount || 0), 80, y);
       doc.text(String(row.wins || 0), 100, y);
       doc.text(String(row.losses || 0), 120, y);
       doc.text(String(row.gamesWon - row.gamesLost), 140, y);
       doc.text(String(row.pointsScored - row.pointsAgainst), 160, y);
       doc.text(String(row.points || 0), 180, y);
-      y += 7;
+      y += rowHeight;
     });
     
     y += 10;
@@ -1762,17 +1784,33 @@ export default function HierarchyManager({
     
     doc.setFont("helvetica", "normal");
     data.parents.forEach((row: any, idx: number) => {
-      if (y > 270) {
+      const nameStr = row.name || "N/A";
+      const rootStr = row.rootName || "N/A";
+      const nameLines: string[] = doc.splitTextToSize(nameStr, 53);
+      const rootLines: string[] = doc.splitTextToSize(rootStr, 43);
+      const maxLines = Math.max(nameLines.length, rootLines.length, 1);
+      const rowHeight = maxLines * 4.5 + 2.5;
+
+      if (y + rowHeight > 275) {
         doc.addPage();
         y = 20;
       }
       doc.text(String(idx + 1), 14, y);
-      doc.text(row.name || "N/A", 25, y);
-      doc.text(row.rootName || "N/A", 80, y);
+      
+      // Render name lines
+      nameLines.forEach((line, idxLine) => {
+        doc.text(line, 25, y + idxLine * 4.5);
+      });
+
+      // Render root lines
+      rootLines.forEach((line, idxLine) => {
+        doc.text(line, 80, y + idxLine * 4.5);
+      });
+
       doc.text(String(row.wins || 0), 125, y);
       doc.text(String(row.losses || 0), 145, y);
       doc.text(String(row.points || 0), 180, y);
-      y += 7;
+      y += rowHeight;
     });
     
     y += 10;
@@ -1801,16 +1839,32 @@ export default function HierarchyManager({
     
     doc.setFont("helvetica", "normal");
     data.chapters.forEach((row: any, idx: number) => {
-      if (y > 270) {
+      const nameStr = row.name || "N/A";
+      const parentStr = row.parentName || "N/A";
+      const nameLines: string[] = doc.splitTextToSize(nameStr, 53);
+      const parentLines: string[] = doc.splitTextToSize(parentStr, 48);
+      const maxLines = Math.max(nameLines.length, parentLines.length, 1);
+      const rowHeight = maxLines * 4.5 + 2.5;
+
+      if (y + rowHeight > 275) {
         doc.addPage();
         y = 20;
       }
       doc.text(String(idx + 1), 14, y);
-      doc.text(row.name || "N/A", 25, y);
-      doc.text(row.parentName || "N/A", 80, y);
+      
+      // Render name lines
+      nameLines.forEach((line, idxLine) => {
+        doc.text(line, 25, y + idxLine * 4.5);
+      });
+
+      // Render parent lines
+      parentLines.forEach((line, idxLine) => {
+        doc.text(line, 80, y + idxLine * 4.5);
+      });
+
       doc.text(String(row.playerCount || 0), 130, y);
       doc.text(String(row.points || 0), 180, y);
-      y += 7;
+      y += rowHeight;
     });
     
     doc.save("hierarchy_points_standings.pdf");

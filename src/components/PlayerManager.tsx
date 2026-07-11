@@ -98,6 +98,18 @@ export default function PlayerManager({
 
   // Master Global Registry state
   const [masterRegistry, setMasterRegistry] = useState<any[]>([]);
+  const [tournamentInfo, setTournamentInfo] = useState<any | null>(null);
+
+  // Subscribe to tournament details
+  useEffect(() => {
+    if (!tournamentId) return;
+    const unsubscribe = onSnapshot(doc(db, 'tournaments', tournamentId), (snapshot) => {
+      if (snapshot.exists()) {
+        setTournamentInfo({ id: snapshot.id, ...snapshot.data() });
+      }
+    });
+    return () => unsubscribe();
+  }, [tournamentId]);
 
   // Fetch Master Registry profiles
   useEffect(() => {
@@ -637,31 +649,42 @@ export default function PlayerManager({
     const doc = new jsPDF();
     
     // Header
-    doc.setFontSize(18);
+    const sportName = tournamentInfo?.sport || "Badminton";
+    doc.setFontSize(10);
     doc.setFont("helvetica", "bold");
-    doc.text("Badminton Tournament Players Pool", 14, 22);
+    doc.setTextColor(100, 100, 100);
+    doc.text(`🏸 ${sportName.toUpperCase()} TOURNAMENT PLAYERS POOL`, 14, 16);
+    
+    doc.setFontSize(15);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(20, 20, 20);
+    const titleText = tournamentInfo?.name || "Tournament Players Pool";
+    doc.text(titleText, 14, 23);
     
     doc.setFontSize(10);
     doc.setFont("helvetica", "normal");
-    doc.text(`Generated: ${new Date().toLocaleDateString()}`, 14, 28);
-    doc.text(`Total Players: ${players.length}`, 14, 34);
+    doc.setTextColor(80, 80, 80);
+    doc.text(`🏷️ Category: ${tournamentInfo?.category || "N/A"}`, 14, 29);
+    doc.text(`📅 Date: ${tournamentInfo?.date || "N/A"}  |  📍 Location: ${tournamentInfo?.location || "N/A"}  |  🔑 Code: ${tournamentId}`, 14, 35);
+    doc.text(`⏱️ Generated: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}  |  Total Players: ${players.length}`, 14, 41);
     
     // Draw horizontal line
     doc.setDrawColor(200, 200, 200);
-    doc.line(14, 38, 196, 38);
+    doc.line(14, 45, 196, 45);
     
-    let y = 46;
-    doc.setFontSize(10);
+    let y = 52;
+    doc.setFontSize(9);
     
     // Headers
     doc.setFont("helvetica", "bold");
     doc.text("#", 14, y);
     doc.text("Name", 22, y);
-    doc.text("Gender", 75, y);
-    doc.text("Age", 95, y);
-    doc.text("Phone", 110, y);
-    doc.text("Group", 140, y);
-    doc.text("Chapter (L2)", 170, y);
+    doc.text("Gender", 70, y);
+    doc.text("Age", 82, y);
+    doc.text("Phone", 92, y);
+    doc.text("Group", 120, y);
+    doc.text("L1 Hierarchy", 144, y);
+    doc.text("L2 Hierarchy", 172, y);
     
     doc.line(14, y + 2, 196, y + 2);
     y += 8;
@@ -677,24 +700,27 @@ export default function PlayerManager({
       const ageStr = p.age ? String(p.age) : "-";
       const phoneStr = p.mobile || "-";
       const groupStr = assignedGroup ? assignedGroup.name : "-";
-      const chapterStr = assignment ? assignment.chapterName : "-";
+      const l1Str = assignment ? (assignment.level1Name || assignment.parentName || "-") : "-";
+      const l2Str = assignment ? (assignment.level2Name || assignment.chapterName || "-") : "-";
 
-      const nameLines: string[] = doc.splitTextToSize(nameStr, 51);
-      const chapterLines: string[] = doc.splitTextToSize(chapterStr, 25);
-      const maxLines = Math.max(nameLines.length, chapterLines.length, 1);
+      const nameLines: string[] = doc.splitTextToSize(nameStr, 45);
+      const l1Lines: string[] = doc.splitTextToSize(l1Str, 25);
+      const l2Lines: string[] = doc.splitTextToSize(l2Str, 22);
+      const maxLines = Math.max(nameLines.length, l1Lines.length, l2Lines.length, 1);
       const rowHeight = maxLines * 4.5 + 2.5;
 
-      if (y + rowHeight > 285) {
+      if (y + rowHeight > 280) {
         doc.addPage();
         y = 20;
         doc.setFont("helvetica", "bold");
         doc.text("#", 14, y);
         doc.text("Name", 22, y);
-        doc.text("Gender", 75, y);
-        doc.text("Age", 95, y);
-        doc.text("Phone", 110, y);
-        doc.text("Group", 140, y);
-        doc.text("Chapter (L2)", 170, y);
+        doc.text("Gender", 70, y);
+        doc.text("Age", 82, y);
+        doc.text("Phone", 92, y);
+        doc.text("Group", 120, y);
+        doc.text("L1 Hierarchy", 144, y);
+        doc.text("L2 Hierarchy", 172, y);
         doc.line(14, y + 2, 196, y + 2);
         y += 8;
         doc.setFont("helvetica", "normal");
@@ -707,14 +733,19 @@ export default function PlayerManager({
         doc.text(line, 22, y + idxLine * 4.5);
       });
       
-      doc.text(genderStr, 75, y);
-      doc.text(ageStr, 95, y);
-      doc.text(phoneStr, 110, y);
-      doc.text(groupStr, 140, y);
+      doc.text(genderStr, 70, y);
+      doc.text(ageStr, 82, y);
+      doc.text(phoneStr, 92, y);
+      doc.text(groupStr, 120, y);
       
-      // Render chapter lines
-      chapterLines.forEach((line, idxLine) => {
-        doc.text(line, 170, y + idxLine * 4.5);
+      // Render L1 lines
+      l1Lines.forEach((line, idxLine) => {
+        doc.text(line, 144, y + idxLine * 4.5);
+      });
+      
+      // Render L2 lines
+      l2Lines.forEach((line, idxLine) => {
+        doc.text(line, 172, y + idxLine * 4.5);
       });
       
       y += rowHeight;

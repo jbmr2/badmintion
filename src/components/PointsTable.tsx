@@ -538,20 +538,54 @@ export default function PointsTable({
     const doc = new jsPDF();
     
     // Header
-    doc.setFontSize(18);
+    const sportName = tournament?.sport || "Badminton";
+    doc.setFontSize(10);
     doc.setFont("helvetica", "bold");
-    doc.text("Badminton Tournament Points Table & Standings", 14, 22);
+    doc.setTextColor(100, 100, 100);
+    doc.text(`🏸 ${sportName.toUpperCase()} TOURNAMENT STANDINGS`, 14, 16);
+    
+    doc.setFontSize(15);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(20, 20, 20);
+    const titleText = tournament?.name || "Tournament Points Table & Standings";
+    doc.text(titleText, 14, 23);
     
     doc.setFontSize(10);
     doc.setFont("helvetica", "normal");
-    doc.text(`Generated: ${new Date().toLocaleDateString()}`, 14, 28);
-    doc.text(`Tournament ID: ${tournamentId}`, 14, 34);
+    doc.setTextColor(80, 80, 80);
+    doc.text(`🏷️ Category: ${tournament?.category || "N/A"}`, 14, 29);
+    doc.text(`📅 Date: ${tournament?.date || "N/A"}  |  📍 Location: ${tournament?.location || "N/A"}  |  🔑 Code: ${tournamentId}`, 14, 35);
+    doc.text(`⏱️ Generated: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`, 14, 41);
     
     // Draw horizontal line
     doc.setDrawColor(200, 200, 200);
-    doc.line(14, 38, 196, 38);
+    doc.line(14, 45, 196, 45);
     
-    let y = 46;
+    let y = 52;
+    
+    const getFormattedNameWithHierarchy = (playerName: string, playerId: string, partnerId?: string) => {
+      const getPlayerInfo = (pid: string, defaultName: string) => {
+        if (!pid) return defaultName;
+        const l1 = playerL1Map[pid];
+        const l2 = playerL2Map[pid];
+        const parts = [];
+        if (l1) parts.push(l1);
+        if (l2) parts.push(l2);
+        if (parts.length > 0) {
+          return `${defaultName} (${parts.join('/')})`;
+        }
+        return defaultName;
+      };
+
+      if (partnerId) {
+        const names = playerName.split(' & ');
+        const name1 = getPlayerInfo(playerId, names[0] || 'N/A');
+        const name2 = getPlayerInfo(partnerId, names[1] || 'N/A');
+        return `${name1} & ${name2}`;
+      } else {
+        return getPlayerInfo(playerId, playerName);
+      }
+    };
     
     // Sort groups by getGroupOrderWeight
     const sortedGroupsList = [...groups].sort((a, b) => {
@@ -603,7 +637,7 @@ export default function PointsTable({
         
         doc.setFont("helvetica", "normal");
         rankings.forEach((p, idx) => {
-          const nameStr = p.playerName || "N/A";
+          const nameStr = getFormattedNameWithHierarchy(p.playerName || "N/A", p.playerId, p.partnerId);
           const nameLines: string[] = doc.splitTextToSize(nameStr, 58);
           const maxLines = Math.max(nameLines.length, 1);
           const rowHeight = maxLines * 4.5 + 2.5;

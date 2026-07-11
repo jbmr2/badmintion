@@ -194,6 +194,24 @@ export default function APIPortal({ currentTournamentId, onBack }: APIPortalProp
       path: '/api/master-hierarchy',
       description: 'Global master-hierarchy endpoint combining organizational structures, rosters, standings, and matches across all tournaments into one consolidated payload.',
       requiresTournamentId: false
+    },
+    {
+      method: 'GET',
+      path: '/api/badminton/master-hierarchy',
+      description: 'Fetch all consolidated Badminton tournaments combined (Rosters, Standings, Groups, Fixtures, Matches, Roots) in ONE high-speed, cached response.',
+      requiresTournamentId: false
+    },
+    {
+      method: 'GET',
+      path: '/api/table-tennis/master-hierarchy',
+      description: 'Fetch all consolidated Table Tennis tournaments combined (Rosters, Standings, Groups, Fixtures, Matches, Roots) in ONE high-speed, cached response.',
+      requiresTournamentId: false
+    },
+    {
+      method: 'GET',
+      path: '/api/pickleball/master-hierarchy',
+      description: 'Fetch all consolidated Pickleball tournaments combined (Rosters, Standings, Groups, Fixtures, Matches, Roots) in ONE high-speed, cached response.',
+      requiresTournamentId: false
     }
   ];
 
