@@ -603,19 +603,26 @@ export default function PointsTable({
         
         doc.setFont("helvetica", "normal");
         rankings.forEach((p, idx) => {
-          if (y > 280) {
+          const nameStr = p.playerName || "N/A";
+          const nameLines: string[] = doc.splitTextToSize(nameStr, 58);
+          const maxLines = Math.max(nameLines.length, 1);
+          const rowHeight = maxLines * 4.5 + 2.5;
+
+          if (y + rowHeight > 280) {
             doc.addPage();
             y = 20;
             doc.setFont("helvetica", "bold");
             doc.text(`${group.name} (Continued)`, 14, y);
             y += 6;
+            doc.setFont("helvetica", "normal");
           }
           
           doc.text(String(idx + 1), 14, y);
           
-          const nameStr = p.playerName || "N/A";
-          const truncatedName = nameStr.length > 28 ? nameStr.substring(0, 26) + ".." : nameStr;
-          doc.text(truncatedName, 25, y);
+          // Render name lines
+          nameLines.forEach((line, idxLine) => {
+            doc.text(line, 25, y + idxLine * 4.5);
+          });
           
           doc.text(String(p.played), 85, y);
           doc.text(String(p.wins), 95, y);
@@ -626,7 +633,7 @@ export default function PointsTable({
           doc.text(String(p.pointDiff), 145, y);
           doc.text(String(p.matchPoints), 165, y);
           
-          y += 7;
+          y += rowHeight;
         });
         y += 5; // spacing after group table
       }

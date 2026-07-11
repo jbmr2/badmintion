@@ -182,6 +182,18 @@ export default function APIPortal({ currentTournamentId, onBack }: APIPortalProp
       path: '/api/global-players',
       description: 'Fetch the master global player registry database (cross-tournament).',
       requiresTournamentId: false
+    },
+    {
+      method: 'GET',
+      path: '/api/tournaments/all/consolidated',
+      description: 'Fetch the COMPLETE state of ALL tournaments (Badminton, Table Tennis, Pickleball) combined in ONE unified, cached API call, grouped neatly by sport.',
+      requiresTournamentId: false
+    },
+    {
+      method: 'GET',
+      path: '/api/master-hierarchy',
+      description: 'Global master-hierarchy endpoint combining organizational structures, rosters, standings, and matches across all tournaments into one consolidated payload.',
+      requiresTournamentId: false
     }
   ];
 

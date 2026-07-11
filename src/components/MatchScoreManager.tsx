@@ -914,29 +914,42 @@ export default function MatchScoreManager({
       
       doc.setFont("helvetica", "normal");
       matchesInGroup.forEach((f) => {
-        if (y > 270) {
-          doc.addPage();
-          y = 20;
-          doc.setFont("helvetica", "bold");
-          doc.text(`${groupName} (Continued)`, 14, y);
-          y += 6;
-        }
-        
-        doc.text(f.id.substring(0, 6).toUpperCase(), 14, y);
-        
         // P1 string
         const p1Name = f.isDoubles
           ? `${getPlayerDetailsWithHierarchy(f.player1aName || 'N/A', f.player1aId)} & ${getPlayerDetailsWithHierarchy(f.player1bName || 'N/A', f.player1bId)}`
           : getPlayerDetailsWithHierarchy(f.player1Name || 'N/A', f.player1Id);
-        const truncatedP1 = p1Name.length > 40 ? p1Name.substring(0, 38) + ".." : p1Name;
-        doc.text(truncatedP1, 35, y);
         
         // P2 string
         const p2Name = f.isDoubles
           ? `${getPlayerDetailsWithHierarchy(f.player2aName || 'N/A', f.player2aId)} & ${getPlayerDetailsWithHierarchy(f.player2bName || 'N/A', f.player2bId)}`
           : getPlayerDetailsWithHierarchy(f.player2Name || 'N/A', f.player2Id);
-        const truncatedP2 = p2Name.length > 40 ? p2Name.substring(0, 38) + ".." : p2Name;
-        doc.text(truncatedP2, 110, y);
+
+        // Split to size to prevent truncation and show full name
+        const p1Lines: string[] = doc.splitTextToSize(p1Name, 73);
+        const p2Lines: string[] = doc.splitTextToSize(p2Name, 53);
+        const maxLines = Math.max(p1Lines.length, p2Lines.length, 1);
+        const rowHeight = maxLines * 4.5 + 2.5;
+
+        if (y + rowHeight > 275) {
+          doc.addPage();
+          y = 20;
+          doc.setFont("helvetica", "bold");
+          doc.text(`${groupName} (Continued)`, 14, y);
+          y += 6;
+          doc.setFont("helvetica", "normal");
+        }
+        
+        doc.text(f.id.substring(0, 6).toUpperCase(), 14, y);
+        
+        // Render Player 1 lines
+        p1Lines.forEach((line, index) => {
+          doc.text(line, 35, y + index * 4.5);
+        });
+        
+        // Render Player 2 lines
+        p2Lines.forEach((line, index) => {
+          doc.text(line, 110, y + index * 4.5);
+        });
         
         // Status
         const statusStr = f.status === 'completed' ? 'Completed' : (f.status === 'live' ? 'LIVE' : 'Upcoming');
@@ -958,7 +971,7 @@ export default function MatchScoreManager({
         }
         doc.text(scoreStr, 175, y);
         
-        y += 7;
+        y += rowHeight;
       });
       y += 5; // spacing after group table
     });

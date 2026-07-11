@@ -69,6 +69,7 @@ export default function PlayerManager({
   const [importMode, setImportMode] = useState<'single' | 'bulk' | 'pairs'>('single');
   const [bulkText, setBulkText] = useState('');
   const [parsedPlayers, setParsedPlayers] = useState<any[]>([]);
+  const [conflictsToResolve, setConflictsToResolve] = useState<any[] | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [importProgress, setImportProgress] = useState(0);
 
@@ -667,7 +668,23 @@ export default function PlayerManager({
     
     doc.setFont("helvetica", "normal");
     filteredPlayersList.forEach((p, index) => {
-      if (y > 280) {
+      const assignedGroup = groups.find(g => g.playerIds?.includes(p.id));
+      const assignment = allRootsPlayers.find(ap => ap.id === p.id);
+      
+      const numStr = String(index + 1);
+      const nameStr = p.name || "N/A";
+      const genderStr = p.gender || "Male";
+      const ageStr = p.age ? String(p.age) : "-";
+      const phoneStr = p.mobile || "-";
+      const groupStr = assignedGroup ? assignedGroup.name : "-";
+      const chapterStr = assignment ? assignment.chapterName : "-";
+
+      const nameLines: string[] = doc.splitTextToSize(nameStr, 51);
+      const chapterLines: string[] = doc.splitTextToSize(chapterStr, 25);
+      const maxLines = Math.max(nameLines.length, chapterLines.length, 1);
+      const rowHeight = maxLines * 4.5 + 2.5;
+
+      if (y + rowHeight > 285) {
         doc.addPage();
         y = 20;
         doc.setFont("helvetica", "bold");
@@ -683,30 +700,24 @@ export default function PlayerManager({
         doc.setFont("helvetica", "normal");
       }
       
-      const assignedGroup = groups.find(g => g.playerIds?.includes(p.id));
-      const assignment = allRootsPlayers.find(ap => ap.id === p.id);
-      
-      const numStr = String(index + 1);
-      const nameStr = p.name || "N/A";
-      const genderStr = p.gender || "Male";
-      const ageStr = p.age ? String(p.age) : "-";
-      const phoneStr = p.mobile || "-";
-      const groupStr = assignedGroup ? assignedGroup.name : "-";
-      const chapterStr = assignment ? assignment.chapterName : "-";
-      
       doc.text(numStr, 14, y);
-      // Truncate name if too long
-      const truncatedName = nameStr.length > 24 ? nameStr.substring(0, 22) + ".." : nameStr;
-      doc.text(truncatedName, 22, y);
+      
+      // Render name lines
+      nameLines.forEach((line, idxLine) => {
+        doc.text(line, 22, y + idxLine * 4.5);
+      });
+      
       doc.text(genderStr, 75, y);
       doc.text(ageStr, 95, y);
       doc.text(phoneStr, 110, y);
       doc.text(groupStr, 140, y);
       
-      const truncatedChapter = chapterStr.length > 12 ? chapterStr.substring(0, 10) + ".." : chapterStr;
-      doc.text(truncatedChapter, 170, y);
+      // Render chapter lines
+      chapterLines.forEach((line, idxLine) => {
+        doc.text(line, 170, y + idxLine * 4.5);
+      });
       
-      y += 7;
+      y += rowHeight;
     });
     
     doc.save("players_list.pdf");
@@ -834,7 +845,7 @@ export default function PlayerManager({
 
       if (cleanCols.length === 0 || cleanCols.every(c => !c)) continue;
 
-      const createPlayerEntry = (name: string, age: string, mobile: string, originalGroup: string, pairTeam: string = "", pairId?: string) => {
+      const createPlayerEntry = (name: string, age: string, mobile: string, originalGroup: string, pairTeam: string = "", pairId?: string, email: string = "") => {
         const mobileCleanedInput = mobile.replace(/[^0-9+]/g, '').trim();
         let mobileCleaned = mobileCleanedInput;
         let nameTrimmed = name.trim();
@@ -842,6 +853,7 @@ export default function PlayerManager({
         // Check master global registry for automatic lookup & auto-fill!
         let isAutoFilledFromGlobal = false;
         let matchedGlobalL2Name = "";
+        let matchedGlobalEmail = "";
         
         // 1. Try lookup by mobile first
         let matchedMaster = null;
@@ -869,11 +881,19 @@ export default function PlayerManager({
           if (matchedMaster.l2) {
             matchedGlobalL2Name = matchedMaster.l2;
           }
+          if (matchedMaster.email) {
+            matchedGlobalEmail = matchedMaster.email;
+          }
         }
+
+        const finalEmail = email.trim() || matchedGlobalEmail || "";
 
         // Row-level validation
         let isValid = true;
         let errorMsg = "";
+
+        let isDuplicate = false;
+        let existingData = null;
 
         if (!nameTrimmed) {
           isValid = false;
@@ -885,10 +905,16 @@ export default function PlayerManager({
           isValid = false;
           errorMsg = "Duplicate phone number in pasted list.";
         } else if (!isDoublesImport) {
-          const isDbDuplicate = players.some(p => p.mobile && p.mobile.trim().replace(/[^0-9+]/g, '') === mobileCleaned);
-          if (isDbDuplicate) {
-            isValid = false;
-            errorMsg = "Phone number already exists in database.";
+          const existingPlayer = players.find(p => p.mobile && p.mobile.trim().replace(/[^0-9+]/g, '') === mobileCleaned);
+          if (existingPlayer) {
+            isDuplicate = true;
+            existingData = {
+              id: existingPlayer.id,
+              name: existingPlayer.name || '',
+              age: existingPlayer.age || '',
+              mobile: existingPlayer.mobile || '',
+              email: existingPlayer.email || ''
+            };
           }
         }
 
@@ -929,6 +955,7 @@ export default function PlayerManager({
           name: nameTrimmed,
           age: age ? String(Number(age) || '') : '',
           mobile: mobileCleaned,
+          email: finalEmail,
           originalGroup: originalGroup,
           pairTeam: pairTeam,
           groupId: matchedGroupId,
@@ -937,7 +964,9 @@ export default function PlayerManager({
           isValid,
           errorMsg,
           isAutoFilledFromGlobal,
-          pairId: pairId || null
+          pairId: pairId || null,
+          isDuplicate,
+          existingData
         };
       };
       
@@ -945,6 +974,7 @@ export default function PlayerManager({
       let age = "";
       let mobile = "";
       let originalGroup = "";
+      let parsedEmail = "";
 
       if (isDoublesImport) {
         // Doubles format: Name1 [sep] Name2 [sep] TeamName
@@ -965,6 +995,7 @@ export default function PlayerManager({
         const nameIdx = headers.findIndex(h => h.includes('name') || h.includes('player'));
         const ageIdx = headers.findIndex(h => h.includes('age'));
         const mobileIdx = headers.findIndex(h => h.includes('phone') || h.includes('mobile') || h.includes('number') || h.includes('tel'));
+        const emailIdx = headers.findIndex(h => h.includes('email') || h.includes('mail'));
         
         // Identify Group (Team) Index
         let grpIdx = headers.findIndex(h => h.includes('group') || h.includes('team') || h.includes('club'));
@@ -973,12 +1004,22 @@ export default function PlayerManager({
         age = ageIdx !== -1 ? cleanCols[ageIdx] || "" : cleanCols[1] || "";
         mobile = mobileIdx !== -1 ? cleanCols[mobileIdx] || "" : cleanCols[2] || "";
         originalGroup = grpIdx !== -1 ? cleanCols[grpIdx] || "" : "";
+        parsedEmail = emailIdx !== -1 ? cleanCols[emailIdx] || "" : "";
       } else {
         // Fallback positional values: Name (0), Age (1), Mobile (2), Group (3)
         name = cleanCols[0] || "";
         age = cleanCols[1] || "";
         mobile = cleanCols[2] || "";
         originalGroup = cleanCols[3] || "";
+        
+        // Auto-detect email column by scanning for '@' in columns >= 1
+        const emailColIdx = cleanCols.findIndex((val, idx) => idx >= 1 && val.includes('@'));
+        if (emailColIdx !== -1) {
+          parsedEmail = cleanCols[emailColIdx];
+          if (emailColIdx === 3) {
+            originalGroup = cleanCols[4] || "";
+          }
+        }
       }
 
       const mobileCleanedInput = mobile.replace(/[^0-9+]/g, '').trim();
@@ -988,6 +1029,7 @@ export default function PlayerManager({
       // Check master global registry for automatic lookup & auto-fill!
       let isAutoFilledFromGlobal = false;
       let matchedGlobalL2Name = "";
+      let matchedGlobalEmail = "";
       
       // 1. Try lookup by mobile first
       let matchedMaster = null;
@@ -1015,11 +1057,18 @@ export default function PlayerManager({
         if (matchedMaster.l2) {
           matchedGlobalL2Name = matchedMaster.l2;
         }
+        if (matchedMaster.email) {
+          matchedGlobalEmail = matchedMaster.email;
+        }
       }
+
+      const finalEmail = parsedEmail.trim() || matchedGlobalEmail || "";
 
       // Row-level validation
       let isValid = true;
       let errorMsg = "";
+      let isDuplicate = false;
+      let existingData = null;
 
       if (!nameTrimmed) {
         isValid = false;
@@ -1031,10 +1080,16 @@ export default function PlayerManager({
         isValid = false;
         errorMsg = "Duplicate phone number in pasted list.";
       } else {
-        const isDbDuplicate = players.some(p => p.mobile && p.mobile.trim().replace(/[^0-9+]/g, '') === mobileCleaned);
-        if (isDbDuplicate) {
-          isValid = false;
-          errorMsg = "Phone number already exists in database.";
+        const existingPlayer = players.find(p => p.mobile && p.mobile.trim().replace(/[^0-9+]/g, '') === mobileCleaned);
+        if (existingPlayer) {
+          isDuplicate = true;
+          existingData = {
+            id: existingPlayer.id,
+            name: existingPlayer.name || '',
+            age: existingPlayer.age || '',
+            mobile: existingPlayer.mobile || '',
+            email: existingPlayer.email || ''
+          };
         }
       }
 
@@ -1075,13 +1130,16 @@ export default function PlayerManager({
         name: nameTrimmed,
         age: age ? String(Number(age) || '') : '',
         mobile: mobileCleaned,
+        email: finalEmail,
         originalGroup: originalGroup,
         groupId: matchedGroupId,
         chapterId: matchedChapterId,
         matchedChapterName: matchedChapterName,
         isAutoFilledFromGlobal,
         isValid,
-        errorMsg
+        errorMsg,
+        isDuplicate,
+        existingData
       });
     }
 
@@ -1130,41 +1188,87 @@ export default function PlayerManager({
     reader.readAsText(file);
   };
 
-  // Save bulk parsed players directly to Firestore
-  const handleImportSubmit = async () => {
+  // Initiate bulk import flow by checking for player conflicts first
+  const initiateImportFlow = () => {
     const validPlayers = parsedPlayers.filter(p => p.isValid);
     if (validPlayers.length === 0) {
       alert("No valid player profiles to import. Please check validation status.");
       return;
     }
 
+    const duplicates = validPlayers.filter(p => p.isDuplicate);
+    if (duplicates.length > 0) {
+      // Initialize conflicts with a default resolution of 'new' (overwrite)
+      const conflicts = duplicates.map(p => ({
+        ...p,
+        resolution: 'new' as 'new' | 'old'
+      }));
+      setConflictsToResolve(conflicts);
+    } else {
+      executeImport(validPlayers, []);
+    }
+  };
+
+  // Perform actual import of non-conflicting players and resolved conflict players
+  const executeImport = async (normalPlayers: any[], resolvedConflicts: any[]) => {
     setIsImporting(true);
     setImportProgress(0);
 
     let successCount = 0;
-    const total = validPlayers.length;
+    const allToImport = [
+      ...normalPlayers.map(p => ({ ...p, isConflict: false })),
+      ...resolvedConflicts.map(p => ({ ...p, isConflict: true }))
+    ];
+    const total = allToImport.length;
     const tempGroups = [...groups];
 
     for (let idx = 0; idx < total; idx++) {
-      const pData = validPlayers[idx];
+      const pData = allToImport[idx];
       try {
-        const playersCol = collection(db, `tournaments/${tournamentId}/players`);
-        const newPlayerRef = doc(playersCol);
-        const newId = newPlayerRef.id;
+        let playerId = "";
+        let playerProfile: any = {};
 
-        const playerProfile: any = {
-          name: pData.name,
-          age: pData.age ? Number(pData.age) : '',
-          mobile: pData.mobile,
-          createdAt: new Date().toISOString()
-        };
+        if (pData.isConflict) {
+          playerId = pData.existingData.id;
+          if (pData.resolution === 'new') {
+            // Overwrite details
+            playerProfile = {
+              name: pData.name,
+              age: pData.age ? Number(pData.age) : '',
+              mobile: pData.mobile,
+              email: pData.email || '',
+              updatedAt: new Date().toISOString()
+            };
+            await updateDoc(doc(db, `tournaments/${tournamentId}/players`, playerId), playerProfile);
+          } else {
+            // Keep current database details
+            playerProfile = {
+              name: pData.existingData.name,
+              age: pData.existingData.age ? Number(pData.existingData.age) : '',
+              mobile: pData.existingData.mobile,
+              email: pData.existingData.email || ''
+            };
+          }
+        } else {
+          // Normal new player creation
+          const playersCol = collection(db, `tournaments/${tournamentId}/players`);
+          const newPlayerRef = doc(playersCol);
+          playerId = newPlayerRef.id;
 
-        if (pData.pairId) {
-          playerProfile.pairId = pData.pairId;
+          playerProfile = {
+            name: pData.name,
+            age: pData.age ? Number(pData.age) : '',
+            mobile: pData.mobile,
+            email: pData.email || '',
+            createdAt: new Date().toISOString()
+          };
+
+          if (pData.pairId) {
+            playerProfile.pairId = pData.pairId;
+          }
+
+          await setDoc(newPlayerRef, playerProfile);
         }
-
-        // Create player profile
-        await setDoc(newPlayerRef, playerProfile);
 
         // Nested Chapter L2 Assignment
         let finalChapterId = pData.chapterId || selectedChapterId;
@@ -1173,7 +1277,7 @@ export default function PlayerManager({
           const chapter = allRootsLevel2.find(c => c.id === finalChapterId);
           if (chapter) {
             finalL2Name = chapter.name;
-            const rosterRef = doc(db, `tournaments/${tournamentId}/roots/${chapter.rootId}/level1/${chapter.level1Id}/level2/${chapter.id}/players`, newId);
+            const rosterRef = doc(db, `tournaments/${tournamentId}/roots/${chapter.rootId}/level1/${chapter.level1Id}/level2/${chapter.id}/players`, playerId);
             await setDoc(rosterRef, {
               name: playerProfile.name,
               age: playerProfile.age,
@@ -1184,12 +1288,13 @@ export default function PlayerManager({
         }
 
         // Sync to global master players registry (keyed by mobile)
-        if (playerProfile.mobile) {
+        if (playerProfile.mobile && (!pData.isConflict || pData.resolution === 'new')) {
           const globalPlayerRef = doc(db, 'players', playerProfile.mobile);
           await setDoc(globalPlayerRef, {
             name: playerProfile.name,
             age: playerProfile.age,
             mobile: playerProfile.mobile,
+            email: playerProfile.email || '',
             ...(finalL2Name ? { l2: finalL2Name } : {}),
             updatedAt: new Date().toISOString()
           }, { merge: true });
@@ -1230,12 +1335,15 @@ export default function PlayerManager({
         if (finalGroupId) {
           const targetGroup = tempGroups.find(g => g.id === finalGroupId);
           if (targetGroup) {
-            const updatedPlayerIds = [...(targetGroup.playerIds || []), newId];
-            await updateDoc(doc(db, `tournaments/${tournamentId}/groups`, targetGroup.id), {
-              playerIds: updatedPlayerIds
-            });
-            // Reflect locally for next loop if same group is updated
-            targetGroup.playerIds = updatedPlayerIds;
+            const currentIds = targetGroup.playerIds || [];
+            if (!currentIds.includes(playerId)) {
+              const updatedPlayerIds = [...currentIds, playerId];
+              await updateDoc(doc(db, `tournaments/${tournamentId}/groups`, targetGroup.id), {
+                playerIds: updatedPlayerIds
+              });
+              // Reflect locally for next loop if same group is updated
+              targetGroup.playerIds = updatedPlayerIds;
+            }
           }
         }
 
@@ -1248,10 +1356,26 @@ export default function PlayerManager({
 
     await loadHierarchy();
     setIsImporting(false);
-    alert(`Bulk import completed! Successfully registered ${successCount} of ${total} player profiles.`);
+    alert(`Bulk import completed! Successfully registered/updated ${successCount} of ${total} player profiles.`);
     setParsedPlayers([]);
     setBulkText('');
     setImportMode('single');
+    setConflictsToResolve(null);
+  };
+
+  const toggleConflictResolution = (tempId: string, resolution: 'new' | 'old') => {
+    if (!conflictsToResolve) return;
+    setConflictsToResolve(prev => {
+      if (!prev) return null;
+      return prev.map(c => c.tempId === tempId ? { ...c, resolution } : c);
+    });
+  };
+
+  const handleConfirmConflicts = () => {
+    if (!conflictsToResolve) return;
+    const validPlayers = parsedPlayers.filter(p => p.isValid);
+    const normalPlayers = validPlayers.filter(p => !p.isDuplicate);
+    executeImport(normalPlayers, conflictsToResolve);
   };
 
   return (
@@ -1901,6 +2025,8 @@ export default function PlayerManager({
 
                         let isValid = true;
                         let errorMsg = "";
+                        let isDuplicate = false;
+                        let existingData = null;
                         let matchedChapterId = updated[originalIndex].chapterId || "";
                         let matchedChapterName = updated[originalIndex].matchedChapterName || "";
 
@@ -1916,10 +2042,16 @@ export default function PlayerManager({
                             isValid = false;
                             errorMsg = "Duplicate phone number in pasted list.";
                           } else {
-                            const isDbDup = players.some(dp => dp.mobile && dp.mobile.trim().replace(/[^0-9+]/g, '') === cleanMobile);
-                            if (isDbDup) {
-                              isValid = false;
-                              errorMsg = "Phone number already exists in database.";
+                            const existingPlayer = players.find(dp => dp.mobile && dp.mobile.trim().replace(/[^0-9+]/g, '') === cleanMobile);
+                            if (existingPlayer) {
+                              isDuplicate = true;
+                              existingData = {
+                                id: existingPlayer.id,
+                                name: existingPlayer.name || '',
+                                age: existingPlayer.age || '',
+                                mobile: existingPlayer.mobile || '',
+                                email: existingPlayer.email || ''
+                              };
                             }
                           }
                         }
@@ -1950,6 +2082,8 @@ export default function PlayerManager({
                         updated[originalIndex].matchedChapterName = matchedChapterName;
                         updated[originalIndex].isValid = isValid;
                         updated[originalIndex].errorMsg = errorMsg;
+                        updated[originalIndex].isDuplicate = isDuplicate;
+                        updated[originalIndex].existingData = existingData;
                         setParsedPlayers(updated);
                       };
 
@@ -1961,9 +2095,15 @@ export default function PlayerManager({
                           {/* Row Status Indicator */}
                           <td className="p-3 pl-4">
                             {p.isValid ? (
-                              <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded text-[10px] font-bold border border-emerald-100">
-                                <Check className="w-3 h-3 text-emerald-600" /> Ready
-                              </span>
+                              p.isDuplicate ? (
+                                <span className="inline-flex items-center gap-1 text-amber-700 bg-amber-50 px-2 py-0.5 rounded text-[10px] font-bold border border-amber-200" title="This player already exists. You can choose to keep current info or overwrite with new info on import.">
+                                  <RefreshCw className="w-3 h-3 text-amber-600 animate-spin-slow" /> Duplicate
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded text-[10px] font-bold border border-emerald-100">
+                                  <Check className="w-3 h-3 text-emerald-600" /> Ready
+                                </span>
+                              )
                             ) : (
                               <span 
                                 className="inline-flex items-center gap-1 text-rose-700 bg-rose-50 px-2 py-0.5 rounded text-[10px] font-bold border border-rose-100 cursor-help"
@@ -2108,7 +2248,7 @@ export default function PlayerManager({
                     Clear Preview
                   </button>
                   <button
-                    onClick={handleImportSubmit}
+                    onClick={initiateImportFlow}
                     disabled={isImporting || parsedPlayers.filter(p => p.isValid).length === 0}
                     className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-black text-xs rounded-xl transition shadow-sm hover:shadow flex items-center gap-1.5"
                   >
@@ -2440,6 +2580,128 @@ export default function PlayerManager({
             playerL1Map={Object.fromEntries(allRootsPlayers.map(ap => [ap.id, ap.level1Name]))}
             playerL2Map={Object.fromEntries(allRootsPlayers.map(ap => [ap.id, ap.level2Name]))}
           />
+        )}
+      </AnimatePresence>
+
+      {/* Duplicate / Conflict Resolution Modal */}
+      <AnimatePresence>
+        {conflictsToResolve && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            {/* Backdrop */}
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setConflictsToResolve(null)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+            />
+            {/* Modal Box */}
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0, y: 15 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 15 }}
+              className="bg-white rounded-3xl p-6 max-w-2xl w-full max-h-[85vh] overflow-y-auto shadow-2xl relative z-10 border border-slate-100 flex flex-col"
+            >
+              <div className="flex items-center gap-3 text-amber-600 mb-2 border-b border-slate-100 pb-3">
+                <div className="p-2 bg-amber-50 rounded-xl">
+                  <RefreshCw className="w-6 h-6 text-amber-600 animate-spin-slow" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-slate-900">Resolve Duplicate Player Records</h3>
+                  <p className="text-xs text-slate-500 font-medium">We found existing records for these phone numbers. Please decide for each profile.</p>
+                </div>
+              </div>
+
+              {/* Scrollable Conflict List */}
+              <div className="space-y-6 my-4 overflow-y-auto pr-1 flex-1 max-h-[50vh]">
+                {conflictsToResolve.map((conflict) => {
+                  const isOldSelected = conflict.resolution === 'old';
+                  const isNewSelected = conflict.resolution === 'new';
+
+                  return (
+                    <div key={conflict.tempId} className="border border-slate-150 rounded-2xl p-4 bg-slate-50/50 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-black text-slate-700 bg-slate-200/80 px-2.5 py-1 rounded-full">
+                          📞 {conflict.mobile}
+                        </span>
+                        <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-100">
+                          Duplicate Found
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {/* Old / Current Data Option */}
+                        <div 
+                          onClick={() => toggleConflictResolution(conflict.tempId, 'old')}
+                          className={`cursor-pointer rounded-xl p-3 border-2 transition-all flex flex-col justify-between ${
+                            isOldSelected 
+                              ? 'border-indigo-600 bg-indigo-50/40 shadow-xs' 
+                              : 'border-slate-200 bg-white hover:border-slate-300'
+                          }`}
+                        >
+                          <div>
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Current Database Record</span>
+                              <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${isOldSelected ? 'border-indigo-600 bg-indigo-600' : 'border-slate-300'}`}>
+                                {isOldSelected && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                              </div>
+                            </div>
+                            <div className="space-y-1 text-xs">
+                              <p className="font-bold text-slate-800"><span className="text-slate-400 font-medium">Name:</span> {conflict.existingData.name}</p>
+                              <p className="font-bold text-slate-800"><span className="text-slate-400 font-medium">Age:</span> {conflict.existingData.age || 'N/A'}</p>
+                              <p className="font-bold text-slate-800 truncate" title={conflict.existingData.email}><span className="text-slate-400 font-medium">Email:</span> {conflict.existingData.email || 'N/A'}</p>
+                            </div>
+                          </div>
+                          <span className="text-[10px] font-bold text-slate-500 mt-2 block text-center bg-slate-100 rounded py-0.5">Keep existing info</span>
+                        </div>
+
+                        {/* New / Imported Data Option */}
+                        <div 
+                          onClick={() => toggleConflictResolution(conflict.tempId, 'new')}
+                          className={`cursor-pointer rounded-xl p-3 border-2 transition-all flex flex-col justify-between ${
+                            isNewSelected 
+                              ? 'border-indigo-600 bg-indigo-50/40 shadow-xs' 
+                              : 'border-slate-200 bg-white hover:border-slate-300'
+                          }`}
+                        >
+                          <div>
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">My New Imported Record</span>
+                              <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${isNewSelected ? 'border-indigo-600 bg-indigo-600' : 'border-slate-300'}`}>
+                                {isNewSelected && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                              </div>
+                            </div>
+                            <div className="space-y-1 text-xs">
+                              <p className="font-bold text-slate-800"><span className="text-slate-400 font-medium">Name:</span> {conflict.name}</p>
+                              <p className="font-bold text-slate-800"><span className="text-slate-400 font-medium">Age:</span> {conflict.age || 'N/A'}</p>
+                              <p className="font-bold text-slate-800 truncate" title={conflict.email}><span className="text-slate-400 font-medium">Email:</span> {conflict.email || 'N/A'}</p>
+                            </div>
+                          </div>
+                          <span className="text-[10px] font-bold text-indigo-600 mt-2 block text-center bg-indigo-50 rounded py-0.5">Overwrite with new info</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Action row */}
+              <div className="flex justify-between items-center border-t border-slate-100 pt-4 mt-2">
+                <button 
+                  onClick={() => setConflictsToResolve(null)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-xs rounded-xl transition"
+                >
+                  Cancel Import
+                </button>
+                <button 
+                  onClick={handleConfirmConflicts}
+                  className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl transition shadow-sm hover:shadow flex items-center gap-1.5"
+                >
+                  <CheckCircle className="w-4 h-4" /> Resolve & Import All
+                </button>
+              </div>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
     </div>

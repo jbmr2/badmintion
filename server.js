@@ -183,24 +183,313 @@ async function startServer() {
       const colRef = collection(db, 'tournaments');
       const snap = await getDocs(colRef);
       const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      res.json(list);
+
+      // Calculate status for each tournament
+      const enhancedList = await Promise.all(list.map(async (t) => {
+        if (t.status) return t; // Already has explicit status
+
+        try {
+          const fixturesSnap = await getDocs(collection(db, `tournaments/${t.id}/fixtures`));
+          if (fixturesSnap.empty) {
+            return { ...t, status: 'upcoming' };
+          }
+          const fixtures = fixturesSnap.docs.map(doc => doc.data());
+          const total = fixtures.length;
+          const completed = fixtures.filter(f => f.status === 'completed').length;
+          const live = fixtures.filter(f => f.status === 'live').length;
+
+          let status = 'upcoming';
+          if (completed === total && total > 0) {
+            status = 'completed';
+          } else if (live > 0 || (completed > 0 && completed < total)) {
+            status = 'active';
+          }
+          return { ...t, status };
+        } catch (e) {
+          console.error(`Error calculating status for tournament ${t.id}:`, e);
+          return { ...t, status: 'upcoming' };
+        }
+      }));
+
+      res.json(enhancedList);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
+  });
+
+  // Global cache for all consolidated tournaments
+  let allConsolidatedCache = {
+    data: null,
+    timestamp: 0
+  };
+
+  // GET all tournaments consolidated (Rosters, Standings, Groups, Fixtures, Matches, Roots) in 1 combined API
+  app.get('/api/tournaments/all/consolidated', checkDb, async (req, res) => {
+    try {
+      const { db, fs } = req;
+      const { collection, getDocs } = fs;
+      const now = Date.now();
+
+      // Return cached data if valid (TTL: 10 seconds)
+      if (allConsolidatedCache.data && (now - allConsolidatedCache.timestamp < 10000)) {
+        return res.json(allConsolidatedCache.data);
+      }
+
+      // Fetch all tournaments
+      const colRef = collection(db, 'tournaments');
+      const tournamentsSnap = await getDocs(colRef);
+      const tournamentList = tournamentsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      // Concurrently build consolidated data for each tournament
+      const consolidatedTournaments = await Promise.all(tournamentList.map(async (t) => {
+        const tournamentId = t.id;
+        try {
+          // 1. Get Players
+          const playersSnap = await getDocs(collection(db, `tournaments/${tournamentId}/players`));
+          let players = playersSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+          const playerMap = {};
+          players.forEach(p => {
+            playerMap[p.id] = p.name;
+          });
+
+          // 2. Get Groups
+          const groupsSnap = await getDocs(collection(db, `tournaments/${tournamentId}/groups`));
+          const groups = groupsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+          // 3. Get Fixtures
+          const fixturesSnap = await getDocs(collection(db, `tournaments/${tournamentId}/fixtures`));
+          let fixtures = fixturesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+          try {
+            const { playerHierarchyMap, playerEmails } = await getPlayerHierarchyMap(db, fs, tournamentId);
+            fixtures = enrichFixturesWithHierarchy(fixtures, playerHierarchyMap, playerEmails);
+            
+            // Enrich players with hierarchy
+            players = players.map(player => {
+              const hierarchy = playerHierarchyMap[player.id];
+              if (hierarchy) {
+                return {
+                  ...player,
+                  level1Id: hierarchy.level1Id,
+                  level1Name: hierarchy.level1Name,
+                  level2Id: hierarchy.level2Id,
+                  level2Name: hierarchy.level2Name,
+                  rootId: hierarchy.rootId,
+                  rootName: hierarchy.rootName
+                };
+              }
+              return player;
+            });
+          } catch (innerErr) {
+            console.error(`Error enriching for tournament ${tournamentId}:`, innerErr);
+          }
+
+          // 4. Get Matches
+          const matchesSnap = await getDocs(collection(db, `tournaments/${tournamentId}/matches`));
+          const matches = matchesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+          // 5. Get Roots (Hierarchy)
+          const rootsSnap = await getDocs(collection(db, `tournaments/${tournamentId}/roots`));
+          const roots = rootsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+          // 6. Calculate standings
+          const groupedStats = {};
+          groups.forEach(group => {
+            groupedStats[group.name] = {};
+            if (group.playerIds) {
+              group.playerIds.forEach(playerId => {
+                const playerName = playerMap[playerId];
+                if (playerName) {
+                  groupedStats[group.name][playerName] = {
+                    playerId,
+                    wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0
+                  };
+                }
+              });
+            }
+          });
+
+          matches.forEach(match => {
+            const fixture = fixtures.find(f => f.id === match.fixtureId);
+            if (!fixture || !fixture.groupName) return;
+
+            const groupName = fixture.groupName;
+            const p1 = fixture.player1Name;
+            const p2 = fixture.player2Name;
+            const s = match.scores;
+
+            if (fixture.matchType && fixture.matchType !== 'league') return;
+
+            if (!groupedStats[groupName]) groupedStats[groupName] = {};
+            if (!groupedStats[groupName][p1]) {
+              groupedStats[groupName][p1] = { playerId: fixture.player1Id, wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0 };
+            }
+            if (!groupedStats[groupName][p2]) {
+              groupedStats[groupName][p2] = { playerId: fixture.player2Id, wins: 0, losses: 0, gamesWon: 0, gamesLost: 0, pointsScored: 0, pointsAgainst: 0 };
+            }
+
+            if (match.winner === 'player1') groupedStats[groupName][p1].wins++;
+            else if (match.winner === 'player2') groupedStats[groupName][p1].losses++;
+
+            groupedStats[groupName][p1].gamesWon += match.p1Games || 0;
+            groupedStats[groupName][p1].gamesLost += match.p2Games || 0;
+            groupedStats[groupName][p1].pointsScored += (s.p1g1 || 0) + (s.p1g2 || 0) + (s.p1g3 || 0);
+            groupedStats[groupName][p1].pointsAgainst += (s.p2g1 || 0) + (s.p2g2 || 0) + (s.p2g3 || 0);
+
+            if (match.winner === 'player2') groupedStats[groupName][p2].wins++;
+            else if (match.winner === 'player1') groupedStats[groupName][p2].losses++;
+
+            groupedStats[groupName][p2].gamesWon += match.p2Games || 0;
+            groupedStats[groupName][p2].gamesLost += match.p1Games || 0;
+            groupedStats[groupName][p2].pointsScored += (s.p2g1 || 0) + (s.p2g2 || 0) + (s.p2g3 || 0);
+            groupedStats[groupName][p2].pointsAgainst += (s.p1g1 || 0) + (s.p1g2 || 0) + (s.p1g3 || 0);
+          });
+
+          const isRoundRobinA = (t.tournamentType || '').toLowerCase().includes('round robin a') || (t.tournamentType || '').toLowerCase().includes('robin a');
+          const winPointsValue = t.winPoints !== undefined ? Number(t.winPoints) : 2;
+          const lossPointsValue = t.lossPoints !== undefined ? Number(t.lossPoints) : 0;
+
+          const standings = {};
+          Object.entries(groupedStats).forEach(([groupName, groupPlayers]) => {
+            standings[groupName] = Object.entries(groupPlayers).map(([playerName, stats]) => {
+              const played = stats.wins + stats.losses;
+              const matchPoints = (stats.wins * winPointsValue) + (stats.losses * lossPointsValue);
+              const gameDiff = stats.gamesWon - stats.gamesLost;
+              const pointDiff = stats.pointsScored - stats.pointsAgainst;
+              return {
+                playerId: stats.playerId,
+                playerName,
+                played,
+                wins: stats.wins,
+                losses: stats.losses,
+                matchPoints,
+                gamesWon: stats.gamesWon,
+                gamesLost: stats.gamesLost,
+                gameDiff,
+                pointsScored: stats.pointsScored,
+                pointsAgainst: stats.pointsAgainst,
+                pointDiff
+              };
+            }).sort((a, b) => {
+              if (isRoundRobinA) {
+                if (b.wins !== a.wins) return b.wins - a.wins;
+              }
+              if (b.matchPoints !== a.matchPoints) return b.matchPoints - a.matchPoints;
+              if (b.gameDiff !== a.gameDiff) return b.gameDiff - a.gameDiff;
+              if (b.pointDiff !== a.pointDiff) return b.pointDiff - a.pointDiff;
+              return 0;
+            });
+          });
+
+          return {
+            id: tournamentId,
+            tournament: t,
+            players,
+            groups,
+            fixtures,
+            matches,
+            roots,
+            standings
+          };
+        } catch (err) {
+          console.error(`Failed to load consolidated data for tournament ${tournamentId}:`, err);
+          return {
+            id: tournamentId,
+            tournament: t,
+            error: err.message,
+            players: [],
+            groups: [],
+            fixtures: [],
+            matches: [],
+            roots: [],
+            standings: {}
+          };
+        }
+      }));
+
+      // Group them by sport
+      const bySport = {
+        badminton: [],
+        table_tennis: [],
+        pickleball: [],
+        others: []
+      };
+
+      consolidatedTournaments.forEach(item => {
+        const sportRaw = (item.tournament.sport || item.tournament.tournamentType || 'badminton').toLowerCase();
+        if (sportRaw.includes('badminton')) {
+          bySport.badminton.push(item);
+        } else if (sportRaw.includes('table_tennis') || sportRaw.includes('table tennis') || sportRaw.includes('tt')) {
+          bySport.table_tennis.push(item);
+        } else if (sportRaw.includes('pickleball') || sportRaw.includes('pickle')) {
+          bySport.pickleball.push(item);
+        } else {
+          bySport.others.push(item);
+        }
+      });
+
+      const responsePayload = {
+        timestamp: new Date().toISOString(),
+        totalTournaments: consolidatedTournaments.length,
+        bySport,
+        tournaments: consolidatedTournaments
+      };
+
+      allConsolidatedCache = {
+        data: responsePayload,
+        timestamp: now
+      };
+
+      res.json(responsePayload);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Alias for /api/master-hierarchy representing all combined tournaments
+  app.get('/api/master-hierarchy', checkDb, async (req, res) => {
+    // Redirect to the unified endpoint
+    res.redirect('/api/tournaments/all/consolidated');
   });
 
   // GET specific tournament details
   app.get('/api/tournaments/:tournamentId', checkDb, async (req, res) => {
     try {
       const { db, fs } = req;
-      const { doc, getDoc } = fs;
+      const { doc, getDoc, collection, getDocs } = fs;
       const { tournamentId } = req.params;
       const docRef = doc(db, 'tournaments', tournamentId);
       const snap = await getDoc(docRef);
       if (!snap.exists()) {
         return res.status(404).json({ error: 'Tournament not found' });
       }
-      res.json({ id: snap.id, ...snap.data() });
+      
+      const t = { id: snap.id, ...snap.data() };
+      if (t.status) {
+        return res.json(t);
+      }
+
+      // Calculate dynamic status based on fixtures
+      let status = 'upcoming';
+      try {
+        const fixturesSnap = await getDocs(collection(db, `tournaments/${tournamentId}/fixtures`));
+        if (!fixturesSnap.empty) {
+          const fixtures = fixturesSnap.docs.map(doc => doc.data());
+          const total = fixtures.length;
+          const completed = fixtures.filter(f => f.status === 'completed').length;
+          const live = fixtures.filter(f => f.status === 'live').length;
+
+          if (completed === total && total > 0) {
+            status = 'completed';
+          } else if (live > 0 || (completed > 0 && completed < total)) {
+            status = 'active';
+          }
+        }
+      } catch (e) {
+        console.error(`Error calculating status for specific tournament ${tournamentId}:`, e);
+      }
+
+      res.json({ ...t, status });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -312,15 +601,30 @@ async function startServer() {
         let structureTournamentId = tournamentId;
 
         try {
-          const [playersListSnap, rootsSnap] = await Promise.all([
+          const [playersListSnap, rootsSnap, globalPlayersSnap] = await Promise.all([
             getDocs(collection(db, `tournaments/${tournamentId}/players`)),
-            getDocs(collection(db, `tournaments/${tournamentId}/roots`))
+            getDocs(collection(db, `tournaments/${tournamentId}/roots`)),
+            getDocs(collection(db, 'players')).catch(() => null)
           ]);
+
+          const globalEmailsByMobile = {};
+          if (globalPlayersSnap) {
+            globalPlayersSnap.docs.forEach(gpDoc => {
+              const gpData = gpDoc.data();
+              if (gpData && gpData.mobile && gpData.email) {
+                globalEmailsByMobile[gpData.mobile] = gpData.email;
+              }
+            });
+          }
 
           playersListSnap.docs.forEach(pDoc => {
             const pData = pDoc.data();
             if (pData) {
-              playerEmails[pDoc.id] = pData.email || '';
+              let email = pData.email || '';
+              if (!email && pData.mobile && globalEmailsByMobile[pData.mobile]) {
+                email = globalEmailsByMobile[pData.mobile];
+              }
+              playerEmails[pDoc.id] = email;
             }
           });
 
@@ -462,6 +766,73 @@ async function startServer() {
           enriched.player2RootName = playerHierarchyMap[f.player2Id].rootName;
         }
       }
+
+      // Calculate Winner Key, Name, and IDs
+      let winnerKey = null;
+      if (f.status === 'completed') {
+        if (f.walkoverWinner) {
+          winnerKey = f.walkoverWinner;
+        } else if (f.scores) {
+          const s = f.scores;
+          let p1Games = 0;
+          let p2Games = 0;
+
+          if ((s.p1g1 !== undefined && s.p2g1 !== undefined) && (s.p1g1 > 0 || s.p2g1 > 0)) {
+            if (s.p1g1 > s.p2g1) p1Games++;
+            else if (s.p2g1 > s.p1g1) p2Games++;
+          }
+          if ((s.p1g2 !== undefined && s.p2g2 !== undefined) && (s.p1g2 > 0 || s.p2g2 > 0)) {
+            if (s.p1g2 > s.p2g2) p1Games++;
+            else if (s.p2g2 > s.p1g2) p2Games++;
+          }
+          if ((s.p1g3 !== undefined && s.p2g3 !== undefined) && (s.p1g3 > 0 || s.p2g3 > 0)) {
+            if (s.p1g3 > s.p2g3) p1Games++;
+            else if (s.p2g3 > s.p1g3) p2Games++;
+          }
+
+          if (p1Games > p2Games) {
+            winnerKey = 'player1';
+          } else if (p2Games > p1Games) {
+            winnerKey = 'player2';
+          }
+        }
+      }
+
+      if (winnerKey) {
+        enriched.winnerKey = winnerKey;
+        const isDoubles = !!(f.isDoubles || f.player1aId || f.player1bId || f.player2aId || f.player2bId);
+        if (isDoubles) {
+          if (winnerKey === 'player1') {
+            enriched.winnerId = f.player1aId || '';
+            enriched.winner1Id = f.player1aId || '';
+            enriched.winner2Id = f.player1bId || '';
+            enriched.winnerIds = [f.player1aId, f.player1bId].filter(Boolean);
+            enriched.winnerName = f.player1bName ? `${f.player1aName} & ${f.player1bName}` : (f.player1aName || '');
+          } else {
+            enriched.winnerId = f.player2aId || '';
+            enriched.winner1Id = f.player2aId || '';
+            enriched.winner2Id = f.player2bId || '';
+            enriched.winnerIds = [f.player2aId, f.player2bId].filter(Boolean);
+            enriched.winnerName = f.player2bName ? `${f.player2aName} & ${f.player2bName}` : (f.player2aName || '');
+          }
+        } else {
+          if (winnerKey === 'player1') {
+            enriched.winnerId = f.player1Id || '';
+            enriched.winnerIds = [f.player1Id].filter(Boolean);
+            enriched.winnerName = f.player1Name || '';
+          } else {
+            enriched.winnerId = f.player2Id || '';
+            enriched.winnerIds = [f.player2Id].filter(Boolean);
+            enriched.winnerName = f.player2Name || '';
+          }
+        }
+      } else {
+        enriched.winnerKey = null;
+        enriched.winnerId = null;
+        enriched.winnerName = null;
+        enriched.winnerIds = [];
+      }
+
       return enriched;
     });
   }
@@ -931,6 +1302,8 @@ async function startServer() {
       res.status(500).json({ error: err.message });
     }
   });
+
+
 
   function serveStaticProduction(appInstance) {
     const distPath = path.join(__dirname, 'dist');
